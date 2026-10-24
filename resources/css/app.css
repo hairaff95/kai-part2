@@ -1,0 +1,197 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@theme {
+    --font-sans: 'Plus Jakarta Sans', sans-serif;
+}
+
+/* ===========================
+   CENTRALIZED THEME DESIGN TOKENS
+   =========================== */
+:root {
+    --bg-main: #F6F7F9;
+    --bg-card: #FFFFFF;
+    --bg-card-border: rgba(243, 244, 246, 0.9);
+    --bg-subtle: #F5F5F7;
+    --text-primary: #171717;
+    --text-secondary: #6B7280;
+    --text-muted: #9CA3AF;
+    --border-subtle: #E5E7EB;
+    --nav-active-bg: #DCDCDC;
+    --nav-active-text: #171717;
+}
+
+.dark {
+    --bg-main: #282A2C;
+    --bg-card: #1F2123;
+    --bg-card-border: rgba(255, 255, 255, 0.05);
+    --bg-subtle: #2D3034;
+    --text-primary: #FFFFFF;
+    --text-secondary: #9AA0A6;
+    --text-muted: #787E87;
+    --border-subtle: rgba(255, 255, 255, 0.1);
+    --nav-active-bg: #43484E;
+    --nav-active-text: #FFFFFF;
+}
+
+/* Safe area insets for notch / home indicator */
+:root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    /* Bottom nav height for main content offset */
+    --mobile-nav-height: 80px;
+}
+
+html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    touch-action: pan-x pan-y;
+}
+
+body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+}
+
+/* Mobile input text & placeholder font scaling (proporsional dan rapi selaras judul field di mobile) */
+@media screen and (max-width: 1023.98px) {
+    input, select, textarea {
+        font-size: 11px !important;
+    }
+    input::placeholder, textarea::placeholder {
+        font-size: 11px !important;
+    }
+}
+
+/* Hide scrollbars but keep scrollability */
+* {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+    background: transparent;
+}
+
+/* ===========================
+   MOBILE TYPOGRAPHY SCALE
+   =========================== */
+
+@media (max-width: 1023px) {
+    body {
+        line-height: 1.5;
+    }
+}
+
+/* ===========================
+   BOTTOM NAV SAFE CLEARANCE
+   =========================== */
+
+/* Main content padding bottom on mobile to not be hidden by floating nav */
+@media (max-width: 1023px) {
+    main:not(.mobile-dropup-sheet) {
+        padding-bottom: max(calc(var(--mobile-nav-height) + 1.5rem), calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px) + 1.5rem));
+    }
+    .mobile-dropup-sheet {
+        padding-bottom: 0 !important;
+    }
+}
+
+/* ===========================
+   VIEW TRANSITIONS (Smooth App-like Page Transitions)
+   =========================== */
+@view-transition {
+    navigation: auto;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 0.2s;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Make bottom nav persistent and smooth across page loads */
+#mobileBottomNav {
+    view-transition-name: mobile-bottom-nav;
+}
+
+#mainNavbar {
+    view-transition-name: main-top-navbar;
+}
+
+#mainNavbar.navbar-scrolled {
+    border-color: rgba(229, 231, 235, 0.8);
+    background-color: rgba(255, 255, 255, 0.95);
+}
+
+.dark #mainNavbar.navbar-scrolled {
+    border-color: rgba(255, 255, 255, 0.08);
+    background-color: rgba(40, 42, 44, 0.95);
+}
+
+/* ===========================
+   FLOATING BOTTOM NAV
+   =========================== */
+
+.mobile-nav-item {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s ease, color 0.2s ease;
+}
+.mobile-nav-item:active {
+    transform: scale(0.92);
+}
+
+/* ===========================
+   MOBILE CARD IMPROVEMENTS
+   =========================== */
+
+@media (max-width: 639px) {
+    /* Tighter card padding on small screens */
+    .mobile-card {
+        padding: 1rem;
+        border-radius: 1rem;
+    }
+
+    /* Overflow-x scroll for tables on mobile */
+    .mobile-table-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Filter chips horizontal scroll */
+    .mobile-filter-scroll {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        gap: 0.5rem;
+        padding-bottom: 0.25rem;
+    }
+}
+
+/* ===========================
+   UTILITY CLASSES
+   =========================== */
+
+/* Prevent tap highlight on mobile */
+a, button {
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Line clamp for mobile text overflow */
+.line-clamp-1 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+.line-clamp-2 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.line-clamp-3 { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+
+
