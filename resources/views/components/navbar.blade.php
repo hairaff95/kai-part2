@@ -32,16 +32,8 @@
             </li>
         </ul>
 
-        <!-- Aksi Kanan: Theme Toggle + Import + Profile/Login -->
+        <!-- Aksi Kanan: Theme Toggle + Profile/Login -->
         <div class="flex items-center gap-2 shrink-0">
-
-            <!-- Link Import (Desktop) -->
-            <a href="{{ route('import.index') }}"
-               class="hidden lg:flex items-center gap-1.5 h-9 px-3 rounded-[10px] border border-gray-300/80 dark:border-white/15 bg-white dark:bg-[#2D3034] text-gray-700 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 text-xs font-semibold transition"
-               title="Import Excel / CSV">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                <span>Import</span>
-            </a>
 
             <!-- Theme Toggle -->
             <button
@@ -91,6 +83,13 @@
                         <div class="px-3 py-2 border-b border-gray-100 dark:border-white/10 text-xs text-gray-500">
                             Masuk sebagai <strong>{{ auth()->user()->name }}</strong>
                         </div>
+                        <a href="{{ route('import.index') }}"
+                           class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                            <svg class="w-4 h-4 text-[#0066FF] dark:text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                            </svg>
+                            <span>Import Data Excel</span>
+                        </a>
                         <form action="{{ route('logout') }}" method="POST">
                             @csrf
                             <button
@@ -159,6 +158,17 @@
 
         <!-- Login / Logout (Mobile) -->
         @auth
+            <!-- Import (Mobile) -->
+            <a href="{{ route('import.index') }}"
+               class="mobile-nav-item flex-1 h-11 flex items-center justify-center rounded-[22px] gap-1.5 transition-all duration-200
+                      {{ $active === 'import' ? 'bg-gray-100 dark:bg-[#2D3034] text-[#0066FF] dark:text-white shadow-xs' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-white/5 active:scale-95' }}"
+               title="Import Excel">
+                <svg class="h-5 w-5 sm:h-[22px] sm:w-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                @if($active === 'import')
+                    <span class="text-[11px] font-semibold hidden xs:inline">Import</span>
+                @endif
+            </a>
+
             <form action="{{ route('logout') }}" method="POST" class="flex-1 flex" onsubmit="return confirm('Apakah Anda yakin ingin keluar?')">
                 @csrf
                 <button
