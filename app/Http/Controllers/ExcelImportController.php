@@ -8,62 +8,67 @@ use App\Models\Tenant;
 use App\Models\PaymentRecord;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class ExcelImportController extends Controller
 {
     /**
-     * Handle import file CSV / Excel sesuai format new-kai.csv.
+     * Handle import file Excel (.xlsx, .xls) / CSV dengan performa tinggi (Bulk Processing).
      *
-     * Kolom yang didukung (case-insensitive, alias fleksibel):
-     * Nomor Kontrak | Tanggal Kontrak | Kelompok | Masa Awal | Masa Akhir |
-     * Nama Mitra    | Alamat Mitra    | Status Mitra | Peruntukan | Blok Aset |
-     * Luas tanah    | Luas bangunan   | Nomor Aset | Jenis Aset | Kmhm |
-     * Termin Ke     | Virtual Account | Tanggal Termin | Total Bayar | Invoice ID | Transaction ID
+     * Setiap baris dalam file Excel dicatat secara utuh (termasuk kontrak dengan nomor sama
+     * yang memiliki beberapa invoice/termin pembayaran), sehingga seluruh baris Excel tertulis
+     * di web dan re-import tidak menyebabkan duplikasi melainkan terupdate.
      */
     public function import(Request $request)
     {
-        @set_time_limit(300);
-        @ini_set('memory_limit', '512M');
+        @set_time_limit(0);
+        @ini_set('max_execution_time', '0');
+        @ini_set('memory_limit', '1024M');
+        @ini_set('precision', '20');
+        @ini_set('serialize_precision', '20');
 
         $request->validate([
-            'excel_file' => 'required|file|max:30720',
+            'excel_file' => 'required|file|max:51200',
         ], [
-            'excel_file.required' => 'Silakan pilih file CSV / Excel terlebih dahulu.',
-            'excel_file.max'      => 'Ukuran file maksimal 30 MB.',
+            'excel_file.required' => 'Silakan pilih file Excel (.xlsx, .xls) atau CSV terlebih dahulu.',
+            'excel_file.max'      => 'Ukuran file maksimal 50 MB.',
         ]);
 
         $file = $request->file('excel_file');
         $ext  = strtolower($file->getClientOriginalExtension());
 
-        if (!in_array($ext, ['csv', 'txt', 'xlsx', 'xls'])) {
-            return back()->with('error', 'Format tidak didukung. Gunakan .csv, .xlsx, atau .xls');
+        if (!in_array($ext, ['xlsx', 'xls', 'csv', 'txt'])) {
+            return back()->with('error', 'Format tidak didukung. Harap gunakan file Excel (.xlsx, .xls) atau CSV (.csv).');
         }
 
         try {
             $rows = $this->parseRows($file, $ext);
 
             if (empty($rows)) {
-                return back()->with('error', 'File kosong atau tidak memiliki data.');
+                return back()->with('error', 'File Excel / CSV kosong atau tidak memiliki data.');
             }
 
             // Cari baris header
             $headerIndex = $this->detectHeaderRow($rows);
-            for ($i = 0; $i < $headerIndex; $i++) array_shift($rows);
+            for ($i = 0; $i < $headerIndex; $i++) {
+                array_shift($rows);
+            }
             $headerRow         = array_shift($rows);
             $normalizedHeaders = array_map(fn($h) => $this->normalizeHeader($h), $headerRow);
 
-            // Preload maps ke memory
-            $tenantsMap   = Tenant::all()->keyBy(fn($t) => strtolower(trim($t->nama_mitra)));
-            $assetsMap    = KaiAsset::all()->keyBy(fn($a) => trim($a->nomor_aset));
-            $contractsMap = KaiContract::all()->keyBy(fn($c) => trim($c->nomor_kontrak));
+            // Inisialisasi struktur data in-memory
+            $uniqueTenantsData = []; // [tenantKey => ['nama_mitra' => ..., ...]]
+            $uniqueAssetsData  = []; // [nomorAset => ['nomor_aset' => ..., ...]]
+            $contractsData     = []; // [targetKontrak => [...]]
+            $paymentsData      = []; // [ [...], [...] ]
+            $skipped           = [];
+            $seen              = []; // Tracking nomor kontrak berulang agar seluruh baris tertulis
 
-            $imported  = 0;
-            $updated   = 0;
-            $skipped   = [];
-            $seen      = [];
-
+            // ── FASE 1: Parse semua baris dalam memory (0 query database) ─
             foreach ($rows as $rowIdx => $row) {
-                $excelRow = $rowIdx + 2;
+                $excelRow = $rowIdx + $headerIndex + 2;
 
                 // Lewati baris kosong
                 if (empty(array_filter($row, fn($v) => $v !== null && trim((string)$v) !== ''))) {
@@ -78,153 +83,322 @@ class ExcelImportController extends Controller
                     }
                 }
 
-                // ── Ambil field utama ────────────────────────────────────
-                $nomorKontrak = $this->field($data, ['nomor_kontrak', 'no_kontrak', 'no_perjanjian', 'kontrak']);
+                // Ambil nomor kontrak
+                $nomorKontrak = $this->field($data, [
+                    'nomor_kontrak', 'no_kontrak', 'no_perjanjian', 'kontrak',
+                    'no_spk', 'nomor_perjanjian'
+                ]);
                 if (!$nomorKontrak) {
                     $nomorKontrak = isset($row[0]) && trim((string)$row[0]) !== '' ? trim((string)$row[0]) : null;
                 }
-                if (!$nomorKontrak) {
-                    $skipped[] = ['row' => $excelRow, 'reason' => 'Nomor Kontrak kosong'];
+
+                if (!$nomorKontrak || str_starts_with($nomorKontrak, '=')) {
+                    $skipped[] = ['row' => $excelRow, 'reason' => 'Nomor Kontrak kosong atau tidak valid'];
                     continue;
                 }
 
-                // Handle duplikat dalam satu import
-                if (!isset($seen[$nomorKontrak])) {
-                    $seen[$nomorKontrak] = 1;
-                    $targetKontrak = $nomorKontrak;
+                $baseKontrak = trim($nomorKontrak);
+
+                // Jika nomor kontrak muncul beberapa kali (misal karena beberapa invoice/termin),
+                // setiap baris tetap dicatat secara utuh di web dengan penomoran unik deterministik
+                if (!isset($seen[$baseKontrak])) {
+                    $seen[$baseKontrak] = 1;
+                    $targetKontrak = $baseKontrak;
                 } else {
-                    $seen[$nomorKontrak]++;
-                    $targetKontrak = $nomorKontrak . ' (' . $seen[$nomorKontrak] . ')';
+                    $seen[$baseKontrak]++;
+                    $targetKontrak = $baseKontrak . ' (' . $seen[$baseKontrak] . ')';
                 }
 
-                $namaMitra   = $this->field($data, ['nama_mitra', 'mitra', 'penyewa', 'nama', 'tenant', 'customer']) ?? '-';
-                $alamatMitra = $this->field($data, ['alamat_mitra', 'alamat', 'address']);
-                $statusMitra = $this->field($data, ['status_mitra', 'status_customer', 'status']) ?? 'Swasta';
+                // Data Mitra
+                $namaMitra = $this->field($data, ['nama_mitra', 'mitra', 'penyewa', 'nama', 'tenant', 'customer', 'nama_penyewa', 'nama_customer']) ?? '-';
+                if (str_starts_with($namaMitra, '=')) $namaMitra = '-';
+                $alamatMitra = $this->field($data, ['alamat_mitra', 'alamat', 'address', 'domisili']);
+                if ($alamatMitra && str_starts_with($alamatMitra, '=')) $alamatMitra = null;
+                $statusMitra = $this->field($data, ['status_mitra', 'status_customer', 'status', 'tipe_mitra']) ?? 'Swasta';
+                if (str_starts_with($statusMitra, '=')) $statusMitra = 'Swasta';
 
-                $nomorAset   = $this->field($data, ['nomor_aset', 'no_aset', 'asset_number', 'id_aset']);
-                $blokAset    = $this->field($data, ['blok_aset', 'blok', 'lokasi_aset', 'nama_blok']);
-                $jenisAset   = $this->field($data, ['jenis_aset', 'jenis_asset', 'tipe_aset']) ?? 'Tanah';
-                $peruntukan  = $this->field($data, ['peruntukan']);
-                $luasTanah   = $this->parseNumber($this->field($data, ['luas_tanah', 'luas_m2', 'luas'])) ?? 0;
-                $luasBangunan= $this->parseNumber($this->field($data, ['luas_bangunan', 'bangunan'])) ?? 0;
-                $kmhm        = $this->field($data, ['kmhm', 'km_hm', 'km']);
-
-                $tglKontrak  = $this->field($data, ['tanggal_kontrak', 'tgl_kontrak', 'waktu_kontrak']);
-                $kelompok    = $this->field($data, ['kelompok', 'kategori', 'jenis_pendapatan', 'tipe']);
-                $masaAwal    = $this->parseDate($this->field($data, ['masa_awal', 'start_datetime', 'awal', 'mulai', 'tgl_mulai']));
-                $masaAkhir   = $this->parseDate($this->field($data, ['masa_akhir', 'end_datetime', 'akhir', 'selesai', 'tgl_akhir', 'jatuh_tempo']));
-                $nilaiKontrak= $this->parseNumber($this->field($data, ['nilai_kontrak', 'harga', 'nilai', 'tarif'])) ?? 0;
-
-                $terminKe    = (int) ($this->parseNumber($this->field($data, ['termin_ke', 'termin', 'no_termin'])) ?? 1);
-                $virtualAcc  = $this->field($data, ['virtual_account', 'va', 'no_va', 'rekening_va']);
-                $tglTermin   = $this->parseDate($this->field($data, ['tanggal_termin', 'tgl_termin', 'tgl_bayar']));
-                $totalBayar  = $this->parseNumber($this->field($data, ['total_bayar', 'bayar', 'pembayaran', 'nilai_bayar'])) ?? 0;
-                $invoiceId   = $this->field($data, ['invoice_id', 'invoice', 'no_invoice']);
-                $transId     = $this->field($data, ['transaction_id', 'trx_id', 'id_transaksi']);
-
-                // ── 1. Upsert Tenant ─────────────────────────────────────
                 $tenantKey = strtolower(trim($namaMitra));
-                if ($tenantsMap->has($tenantKey)) {
-                    $tenant = $tenantsMap->get($tenantKey);
-                } else {
-                    $tenant = Tenant::create([
+                if (!isset($uniqueTenantsData[$tenantKey])) {
+                    $uniqueTenantsData[$tenantKey] = [
                         'nama_mitra'   => $namaMitra,
                         'alamat_mitra' => $alamatMitra,
                         'status_mitra' => $statusMitra,
-                    ]);
-                    $tenantsMap->put($tenantKey, $tenant);
+                    ];
                 }
 
-                // ── 2. Upsert Asset ──────────────────────────────────────
-                if ($nomorAset) {
-                    if (!$assetsMap->has($nomorAset)) {
-                        $asset = KaiAsset::create([
-                            'nomor_aset'    => $nomorAset,
-                            'blok_aset'     => $blokAset,
-                            'jenis_aset'    => $jenisAset,
-                            'peruntukan'    => $peruntukan,
-                            'luas_tanah'    => $luasTanah,
-                            'luas_bangunan' => $luasBangunan,
-                            'kmhm'          => $kmhm,
-                        ]);
-                        $assetsMap->put($nomorAset, $asset);
+                // Data Aset
+                $nomorAset = $this->field($data, ['nomor_aset', 'no_aset', 'asset_number', 'id_aset', 'kode_aset']);
+                if ($nomorAset && str_starts_with($nomorAset, '=')) $nomorAset = null;
+                $blokAset  = $this->field($data, ['blok_aset', 'blok', 'lokasi_aset', 'nama_blok', 'lokasi', 'alamat_aset']);
+                $jenisAset = $this->field($data, ['jenis_aset', 'jenis_asset', 'tipe_aset', 'aset']) ?? 'Tanah';
+                $peruntukan= $this->field($data, ['peruntukan', 'kegunaan', 'fungsi']);
+                $luasTanah = $this->parseNumber($this->field($data, ['luas_tanah', 'luas_m2', 'luas', 'luas_bumi'])) ?? 0;
+                $luasBangunan = $this->parseNumber($this->field($data, ['luas_bangunan', 'bangunan', 'luas_gedung'])) ?? 0;
+                $kmhm      = $this->field($data, ['kmhm', 'km_hm', 'km', 'lokasi_km']);
+
+                if ($nomorAset && !isset($uniqueAssetsData[$nomorAset])) {
+                    $uniqueAssetsData[$nomorAset] = [
+                        'nomor_aset'    => $nomorAset,
+                        'blok_aset'     => $blokAset,
+                        'jenis_aset'    => $jenisAset,
+                        'peruntukan'    => $peruntukan,
+                        'luas_tanah'    => $luasTanah,
+                        'luas_bangunan' => $luasBangunan,
+                        'kmhm'          => $kmhm,
+                    ];
+                }
+
+                // Data Kontrak
+                $tglKontrak  = $this->field($data, ['tanggal_kontrak', 'tgl_kontrak', 'waktu_kontrak', 'tgl_perjanjian']);
+                $kelompok    = $this->field($data, ['kelompok', 'kategori', 'jenis_pendapatan', 'tipe', 'kelompok_aset']);
+                $masaAwal    = $this->parseDate($this->field($data, ['masa_awal', 'start_datetime', 'awal', 'mulai', 'tgl_mulai', 'tanggal_mulai', 'periode_awal']));
+                $masaAkhir   = $this->parseDate($this->field($data, ['masa_akhir', 'end_datetime', 'akhir', 'selesai', 'tgl_akhir', 'tanggal_akhir', 'jatuh_tempo', 'tgl_jatuh_tempo', 'periode_akhir']));
+                $nilaiKontrak= $this->parseNumber($this->field($data, ['nilai_kontrak', 'harga', 'nilai', 'tarif', 'total_kontrak', 'nominal_kontrak', 'nilai_perjanjian'])) ?? 0;
+
+                // Data Tagihan / Invoice
+                $rawTermin   = $this->parseNumber($this->field($data, ['termin_ke', 'termin', 'no_termin', 'ke', 'termin_pembayaran', 'angsuran_ke']));
+                $terminKe    = $rawTermin !== null ? (int)$rawTermin : 0;
+                $virtualAcc  = $this->cleanIdNumber($this->field($data, ['virtual_account', 'va', 'no_va', 'rekening_va', 'nomor_va']));
+                $tglTermin   = $this->parseDate($this->field($data, ['tanggal_termin', 'tgl_termin', 'tgl_bayar', 'tanggal_bayar', 'tgl_invoice', 'tanggal_invoice', 'tgl_tagihan']));
+                $totalBayar  = $this->parseNumber($this->field($data, ['total_bayar', 'bayar', 'pembayaran', 'nilai_bayar', 'jumlah_bayar', 'nominal_bayar', 'nominal', 'amount', 'nilai_tagihan', 'total_tagihan'])) ?? 0;
+                $invoiceId   = $this->cleanIdNumber($this->field($data, ['invoice_id', 'invoice', 'no_invoice', 'nomor_invoice', 'id_invoice']));
+                $transId     = $this->cleanIdNumber($this->field($data, ['transaction_id', 'trx_id', 'id_transaksi', 'no_transaksi', 'id_trans']));
+
+                $actualTermin = $terminKe > 0 ? $terminKe : $seen[$baseKontrak];
+
+                // Nilai kontrak: jika kolom nilai kontrak 0/kosong pada baris ini, gunakan total_bayar baris tersebut
+                $finalNilai = $nilaiKontrak > 0 ? $nilaiKontrak : $totalBayar;
+
+                $contractsData[$targetKontrak] = [
+                    'nomor_kontrak'  => $targetKontrak,
+                    'tenant_key'     => $tenantKey,
+                    'nomor_aset'     => $nomorAset,
+                    'tanggal_kontrak'=> $tglKontrak,
+                    'kelompok'       => $kelompok,
+                    'masa_awal'      => $masaAwal,
+                    'masa_akhir'     => $masaAkhir,
+                    'nilai_kontrak'  => $finalNilai,
+                ];
+
+                $paymentsData[] = [
+                    'nomor_kontrak'      => $targetKontrak,
+                    'base_nomor_kontrak' => $baseKontrak,
+                    'termin_ke'          => max(1, $actualTermin),
+                    'virtual_account'    => $virtualAcc,
+                    'tanggal_termin'     => $tglTermin,
+                    'total_bayar'        => $totalBayar,
+                    'invoice_id'         => $invoiceId,
+                    'transaction_id'     => $transId,
+                ];
+            }
+
+            // ── FASE 2: Eksekusi Bulk Database (Sangat Cepat & Anti-Duplikasi) ─
+
+            // 1. Bulk Tenants
+            $existingTenants = Tenant::all()->keyBy(fn($t) => strtolower(trim($t->nama_mitra)));
+            $newTenants = [];
+            foreach ($uniqueTenantsData as $key => $tData) {
+                if (!$existingTenants->has($key)) {
+                    $newTenants[] = $tData;
+                }
+            }
+            if (!empty($newTenants)) {
+                foreach (array_chunk($newTenants, 500) as $chunk) {
+                    DB::table('tenants')->insert($chunk);
+                }
+                $existingTenants = Tenant::all()->keyBy(fn($t) => strtolower(trim($t->nama_mitra)));
+            }
+
+            // 2. Bulk Assets
+            $existingAssets = KaiAsset::all()->keyBy(fn($a) => trim($a->nomor_aset));
+            $newAssets = [];
+            foreach ($uniqueAssetsData as $num => $aData) {
+                if (!$existingAssets->has($num)) {
+                    $newAssets[] = $aData;
+                }
+            }
+            if (!empty($newAssets)) {
+                foreach (array_chunk($newAssets, 500) as $chunk) {
+                    DB::table('assets')->insertOrIgnore($chunk);
+                }
+            }
+
+            // 3. Bulk Upsert Contracts (Seluruh 2523 baris dicatat, re-import terupdate)
+            $existingContractsInDb = KaiContract::all()->keyBy('nomor_kontrak');
+            $contractsPayload = [];
+            $contractsCreated = 0;
+            $contractsUpdated = 0;
+
+            foreach ($contractsData as $c) {
+                $cNum = $c['nomor_kontrak'];
+                $tenantId = $existingTenants->get($c['tenant_key'])?->id;
+
+                if ($existingContractsInDb->has($cNum)) {
+                    $contractsUpdated++;
+                } else {
+                    $contractsCreated++;
+                }
+
+                $contractsPayload[] = [
+                    'nomor_kontrak'   => $cNum,
+                    'tenant_id'       => $tenantId,
+                    'nomor_aset'      => $c['nomor_aset'],
+                    'tanggal_kontrak' => $c['tanggal_kontrak'],
+                    'kelompok'        => $c['kelompok'],
+                    'masa_awal'       => $c['masa_awal'],
+                    'masa_akhir'      => $c['masa_akhir'],
+                    'nilai_kontrak'   => $c['nilai_kontrak'],
+                    'created_at'      => now(),
+                ];
+            }
+
+            if (!empty($contractsPayload)) {
+                foreach (array_chunk($contractsPayload, 500) as $chunk) {
+                    DB::table('contracts')->upsert(
+                        $chunk,
+                        ['nomor_kontrak'],
+                        ['tenant_id', 'nomor_aset', 'tanggal_kontrak', 'kelompok', 'masa_awal', 'masa_akhir', 'nilai_kontrak']
+                    );
+                }
+            }
+
+            // 4. Bulk Upsert Payments (Anti-Duplikasi dengan pencocokan cerdas)
+            $existingPayments = PaymentRecord::all();
+            $byTargetKontrak  = $existingPayments->groupBy('nomor_kontrak');
+            $byInvoiceId      = $existingPayments->whereNotNull('invoice_id')->where('invoice_id', '!=', '')->keyBy('invoice_id');
+            $byTransactionId  = $existingPayments->whereNotNull('transaction_id')->where('transaction_id', '!=', '')->keyBy('transaction_id');
+            $byBaseTermin     = $existingPayments->groupBy(fn($p) => $p->nomor_kontrak . '___' . $p->termin_ke);
+
+            $claimedIds       = [];
+            $paymentsToInsert = [];
+            $paymentsToUpdate = [];
+            $paymentsCreated  = 0;
+            $paymentsUpdated  = 0;
+
+            foreach ($paymentsData as $pay) {
+                $targetKontrak = $pay['nomor_kontrak'];
+                $baseKontrak   = $pay['base_nomor_kontrak'];
+                $termin        = $pay['termin_ke'];
+                $invId         = $pay['invoice_id'];
+                $trxId         = $pay['transaction_id'];
+
+                $existing = null;
+
+                // 1. Cocokkan target kontrak yang sama persis
+                if ($byTargetKontrak->has($targetKontrak)) {
+                    $cand = $byTargetKontrak->get($targetKontrak)->first(fn($p) => !isset($claimedIds[$p->id]));
+                    if ($cand) $existing = $cand;
+                }
+
+                // 2. Cocokkan invoice_id unik
+                if (!$existing && $invId && $byInvoiceId->has($invId)) {
+                    $cand = $byInvoiceId->get($invId);
+                    if ($cand && !isset($claimedIds[$cand->id])) $existing = $cand;
+                }
+
+                // 3. Cocokkan transaction_id unik
+                if (!$existing && $trxId && $byTransactionId->has($trxId)) {
+                    $cand = $byTransactionId->get($trxId);
+                    if ($cand && !isset($claimedIds[$cand->id])) $existing = $cand;
+                }
+
+                // 4. Cocokkan base kontrak + termin (untuk data lama yang belum ber-suffix)
+                if (!$existing) {
+                    $key = $baseKontrak . '___' . $termin;
+                    if ($byBaseTermin->has($key)) {
+                        $cand = $byBaseTermin->get($key)->first(fn($p) => !isset($claimedIds[$p->id]));
+                        if ($cand) $existing = $cand;
                     }
                 }
 
-                // ── 3. Upsert Contract ───────────────────────────────────
-                if ($contractsMap->has($targetKontrak)) {
-                    $contract = $contractsMap->get($targetKontrak);
-                    $contract->update([
-                        'tenant_id'      => $tenant->id,
-                        'nomor_aset'     => $nomorAset,
-                        'tanggal_kontrak'=> $tglKontrak,
-                        'kelompok'       => $kelompok,
-                        'masa_awal'      => $masaAwal,
-                        'masa_akhir'     => $masaAkhir,
-                        'nilai_kontrak'  => $nilaiKontrak,
-                    ]);
-                    $updated++;
-                } else {
-                    $contract = KaiContract::create([
-                        'nomor_kontrak'  => $targetKontrak,
-                        'tenant_id'      => $tenant->id,
-                        'nomor_aset'     => $nomorAset,
-                        'tanggal_kontrak'=> $tglKontrak,
-                        'kelompok'       => $kelompok,
-                        'masa_awal'      => $masaAwal,
-                        'masa_akhir'     => $masaAkhir,
-                        'nilai_kontrak'  => $nilaiKontrak,
-                    ]);
-                    $contractsMap->put($targetKontrak, $contract);
-                    $imported++;
-                }
+                unset($pay['base_nomor_kontrak']);
 
-                // ── 4. Insert Payment Record ─────────────────────────────
-                // Setiap baris CSV = 1 record tagihan (satu termin)
-                PaymentRecord::create([
-                    'nomor_kontrak'  => $targetKontrak,
-                    'termin_ke'      => max(1, $terminKe),
-                    'virtual_account'=> $virtualAcc,
-                    'tanggal_termin' => $tglTermin,
-                    'total_bayar'    => $totalBayar,
-                    'invoice_id'     => $invoiceId,
-                    'transaction_id' => $transId,
-                ]);
+                if ($existing) {
+                    $claimedIds[$existing->id] = true;
+                    $pay['id'] = $existing->id;
+                    $paymentsToUpdate[] = $pay;
+                    $paymentsUpdated++;
+                } else {
+                    $pay['created_at'] = now();
+                    $paymentsToInsert[] = $pay;
+                    $paymentsCreated++;
+                }
             }
 
-            // Invalidasi cache dashboard
+            if (!empty($paymentsToInsert)) {
+                foreach (array_chunk($paymentsToInsert, 500) as $chunk) {
+                    DB::table('payment_records')->insert($chunk);
+                }
+            }
+
+            if (!empty($paymentsToUpdate)) {
+                foreach (array_chunk($paymentsToUpdate, 500) as $chunk) {
+                    DB::table('payment_records')->upsert(
+                        $chunk,
+                        ['id'],
+                        ['nomor_kontrak', 'termin_ke', 'virtual_account', 'tanggal_termin', 'total_bayar', 'invoice_id', 'transaction_id']
+                    );
+                }
+            }
+
+            // Invalidate Cache
             DashboardController::forgetCache();
             ContractController::forgetCache();
+            Cache::forget('dropdown_kelompok');
+            Cache::forget('dropdown_status_mitra');
 
-            $message = "Import selesai. {$imported} kontrak baru, {$updated} diperbarui.";
+            $totalContracts = $contractsCreated + $contractsUpdated;
+            $totalPayments  = $paymentsCreated + $paymentsUpdated;
+
+            $message = "Import berhasil: {$totalContracts} kontrak tertulis di web ({$contractsCreated} baru, {$contractsUpdated} diperbarui), {$totalPayments} data tagihan diproses.";
             if (!empty($skipped)) {
-                $message .= ' ' . count($skipped) . ' baris dilewati.';
+                $message .= ' (' . count($skipped) . ' baris dilewati karena format tidak lengkap)';
             }
 
             return back()->with('success', $message);
 
         } catch (\Throwable $e) {
-            \Log::error('Import CSV failed: ' . $e->getMessage() . ' | ' . $e->getFile() . ':' . $e->getLine());
-            return back()->with('error', 'Gagal import: ' . $e->getMessage());
+            Log::error('Import Excel/CSV failed: ' . $e->getMessage() . ' | ' . $e->getFile() . ':' . $e->getLine());
+            return back()->with('error', 'Gagal memproses file: ' . $e->getMessage());
         }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
-     * Baca baris dari file CSV/XLSX. Mengembalikan array of arrays.
+     * Bersihkan angka ID/VA yang mungkin berformat notasi ilmiah dari Excel (e.g. 1.2188E+14).
+     */
+    private function cleanIdNumber(?string $val): ?string
+    {
+        if ($val === null || trim($val) === '') return null;
+        $val = trim($val);
+        if (is_numeric($val) && (stripos($val, 'e+') !== false || stripos($val, 'e-') !== false)) {
+            return number_format((float)$val, 0, '', '');
+        }
+        return $val;
+    }
+
+    /**
+     * Baca baris dari file Excel (.xlsx, .xls) atau CSV (.csv, .txt).
+     *
+     * @return array of arrays
      */
     private function parseRows($file, string $ext): array
     {
         $path = $file->getRealPath();
 
+        // 1. Ekstensi CSV / TXT -> fgetcsv (cepat & hemat memori)
         if (in_array($ext, ['csv', 'txt'])) {
             $rows = [];
             if (($handle = fopen($path, 'r')) !== false) {
-                // Deteksi separator: coma atau semicolon
                 $firstLine = fgets($handle);
                 rewind($handle);
-                $sep = substr_count($firstLine, ';') > substr_count($firstLine, ',') ? ';' : ',';
+                $sep = ',';
+                if (substr_count($firstLine, ';') > substr_count($firstLine, ',')) {
+                    $sep = ';';
+                } elseif (substr_count($firstLine, "\t") > substr_count($firstLine, ',')) {
+                    $sep = "\t";
+                }
 
                 while (($line = fgetcsv($handle, 0, $sep)) !== false) {
                     $rows[] = $line;
@@ -234,11 +408,76 @@ class ExcelImportController extends Controller
             return $rows;
         }
 
-        // XLSX — baca via ZIP XML
+        // 2. Ekstensi Excel (.xlsx, .xls) -> PhpSpreadsheet dengan evaluasi formula
+        if ($ext === 'xlsx' || $ext === 'xls') {
+            try {
+                $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($path);
+                $reader->setReadDataOnly(true);
+                $spreadsheet = $reader->load($path);
+                $sheet = $spreadsheet->getActiveSheet();
+
+                $rows = [];
+                foreach ($sheet->getRowIterator() as $row) {
+                    $cellIterator = $row->getCellIterator();
+                    $cellIterator->setIterateOnlyExistingCells(false);
+                    $cells = [];
+                    foreach ($cellIterator as $cell) {
+                        $val = null;
+                        if ($cell->isFormula()) {
+                            $val = $cell->getOldCalculatedValue();
+                            if ($val === null || $val === '#REF!' || $val === '#VALUE!' || $val === '#N/A') {
+                                try {
+                                    $val = $cell->getCalculatedValue();
+                                } catch (\Throwable $e) {
+                                    $val = $cell->getValue();
+                                }
+                            }
+                        } else {
+                            $val = $cell->getValue();
+                        }
+
+                        // Format tanggal jika sel berupa Excel date
+                        if ($val !== null && \PhpOffice\PhpSpreadsheet\Shared\Date::isDateTime($cell)) {
+                            try {
+                                $dateObj = \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($val);
+                                $val = $dateObj->format('Y-m-d');
+                            } catch (\Throwable $e) {
+                                // fallback
+                            }
+                        }
+                        if (is_float($val) && floor($val) == $val) {
+                            $val = number_format($val, 0, '', '');
+                        }
+                        $cells[] = $val !== null ? (string)$val : null;
+                    }
+                    $rows[] = $cells;
+                }
+
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+                return $rows;
+            } catch (\Throwable $e) {
+                Log::warning('PhpSpreadsheet parse failed, falling back to Zip/XML: ' . $e->getMessage());
+            }
+        }
+
+        // 3. Fallback manual untuk file XLSX via ZipArchive
+        if ($ext === 'xlsx') {
+            return $this->parseXlsxXmlFallback($path);
+        }
+
+        return [];
+    }
+
+    /**
+     * Fallback manual XLSX reader via ZipArchive.
+     */
+    private function parseXlsxXmlFallback(string $path): array
+    {
         try {
             $zip = new \ZipArchive();
             if ($zip->open($path) !== true) {
-                throw new \RuntimeException('Tidak bisa buka file XLSX.');
+                throw new \RuntimeException('Tidak bisa membuka arsip file XLSX.');
             }
 
             $sharedStrings = [];
@@ -253,10 +492,8 @@ class ExcelImportController extends Controller
                 }
             }
 
-            // Cari sheet pertama
             $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
             if (!$sheetXml) {
-                // coba dari workbook.xml.rels
                 $relsXml = $zip->getFromName('xl/_rels/workbook.xml.rels');
                 if ($relsXml) {
                     $rels = simplexml_load_string($relsXml);
@@ -271,7 +508,7 @@ class ExcelImportController extends Controller
             $zip->close();
 
             if (!$sheetXml) {
-                throw new \RuntimeException('Tidak menemukan sheet di file XLSX.');
+                throw new \RuntimeException('Tidak menemukan worksheet pada file XLSX.');
             }
 
             $sheet = simplexml_load_string($sheetXml);
@@ -282,15 +519,15 @@ class ExcelImportController extends Controller
                 $lastColIdx = -1;
 
                 foreach ($row->c as $cell) {
-                    // Hitung index kolom dari ref (A=0, B=1, ...)
                     preg_match('/^([A-Z]+)(\d+)$/', (string)$cell['r'], $m);
                     $colIdx = 0;
-                    foreach (str_split($m[1]) as $ch) {
-                        $colIdx = $colIdx * 26 + (ord($ch) - ord('A') + 1);
+                    if (isset($m[1])) {
+                        foreach (str_split($m[1]) as $ch) {
+                            $colIdx = $colIdx * 26 + (ord($ch) - ord('A') + 1);
+                        }
+                        $colIdx--;
                     }
-                    $colIdx--;
 
-                    // Isi kolom kosong di antara
                     while ($lastColIdx < $colIdx - 1) {
                         $rowArr[] = null;
                         $lastColIdx++;
@@ -302,8 +539,7 @@ class ExcelImportController extends Controller
                     if ($type === 's') {
                         $value = $sharedStrings[(int)$value] ?? '';
                     } elseif ($type === '' && is_numeric($value) && (float)$value > 30000 && (float)$value < 60000) {
-                        // Excel serial date → Y-m-d
-                        $value = date('d.m.Y', (int)(((float)$value - 25569) * 86400));
+                        $value = date('Y-m-d', (int)(((float)$value - 25569) * 86400));
                     }
 
                     $rowArr[] = $value;
@@ -314,16 +550,9 @@ class ExcelImportController extends Controller
             }
 
             return $rows;
-
         } catch (\Throwable $e) {
-            \Log::warning('XLSX parse failed, fallback to CSV: ' . $e->getMessage());
-            // Fallback: coba baca sebagai CSV
-            $rows = [];
-            if (($handle = fopen($path, 'r')) !== false) {
-                while (($line = fgetcsv($handle)) !== false) $rows[] = $line;
-                fclose($handle);
-            }
-            return $rows;
+            Log::error('XLSX fallback failed: ' . $e->getMessage());
+            return [];
         }
     }
 
@@ -377,22 +606,13 @@ class ExcelImportController extends Controller
     }
 
     /**
-     * Parse tanggal dari berbagai format:
-     * - Excel serial (misal 42710)
-     * - DD.MM.YYYY HH:MM:SS   (format CSV new-kai.csv)
-     * - DD.MM.YYYY
-     * - DD/MM/YYYY
-     * - YYYY-MM-DD
-     * - Carbon::parse fallback
-     *
-     * @return string|null format Y-m-d
+     * Parse tanggal dari berbagai format (Excel serial date, DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD).
      */
     private function parseDate(?string $val): ?string
     {
         if ($val === null || trim($val) === '') return null;
         $val = trim($val);
 
-        // Blacklist nilai tidak valid
         if (in_array(strtolower($val), ['kosong', '-', 'null', 'n/a', '0'])) return null;
 
         // Excel serial date integer
@@ -401,7 +621,7 @@ class ExcelImportController extends Controller
             return date('Y-m-d', (int)$unix);
         }
 
-        // DD.MM.YYYY HH:MM:SS  (format utama new-kai.csv)
+        // DD.MM.YYYY HH:MM:SS
         if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})/', $val, $m)) {
             $d = (int)$m[1]; $mo = (int)$m[2]; $y = (int)$m[3];
             if (checkdate($mo, $d, $y)) {
@@ -412,7 +632,7 @@ class ExcelImportController extends Controller
         // DD/MM/YYYY atau DD-MM-YYYY
         if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/', $val, $m)) {
             $d = (int)$m[1]; $mo = (int)$m[2]; $y = (int)$m[3];
-            if ($d > 12) { // pasti DD/MM
+            if ($d > 12) {
                 if (checkdate($mo, $d, $y)) return sprintf('%04d-%02d-%02d', $y, $mo, $d);
             }
             if (checkdate($mo, $d, $y)) return sprintf('%04d-%02d-%02d', $y, $mo, $d);
@@ -432,8 +652,7 @@ class ExcelImportController extends Controller
     }
 
     /**
-     * Parse angka dari string dengan format Indonesia (titik sebagai ribuan, koma sebagai desimal).
-     * Contoh: "2,623,637" → 2623637.0 | "1.500.000" → 1500000.0 | "42" → 42.0
+     * Parse angka dari string dengan format Indonesia atau internasional.
      */
     private function parseNumber(?string $val): ?float
     {
@@ -442,16 +661,11 @@ class ExcelImportController extends Controller
         $v = preg_replace('/[^\d.,]/', '', $v);
         if ($v === '') return null;
 
-        // Jika ada koma sebagai pemisah ribuan: "2,623,637"
         if (preg_match('/,\d{3}(,\d{3})*$/', $v) || preg_match('/^\d{1,3}(,\d{3})+$/', $v)) {
             $v = str_replace(',', '', $v);
-        }
-        // Titik sebagai pemisah ribuan: "1.500.000"
-        elseif (preg_match('/\.\d{3}(\.\d{3})*$/', $v) || preg_match('/^\d{1,3}(\.\d{3})+$/', $v)) {
+        } elseif (preg_match('/\.\d{3}(\.\d{3})*$/', $v) || preg_match('/^\d{1,3}(\.\d{3})+$/', $v)) {
             $v = str_replace('.', '', $v);
-        }
-        // Koma sebagai desimal: "1234,56"
-        elseif (str_contains($v, ',') && !str_contains($v, '.')) {
+        } elseif (str_contains($v, ',') && !str_contains($v, '.')) {
             $v = str_replace(',', '.', $v);
         }
 

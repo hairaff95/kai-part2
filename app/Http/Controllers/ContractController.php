@@ -14,14 +14,19 @@ class ContractController extends Controller
     {
         $query = KaiContract::with(['tenant', 'asset'])->latest('created_at');
 
-        // Search
+        // Search (Nomor Kontrak, Nomor Aset, Nama Mitra, Blok Aset, Transaction ID, Invoice ID, VA)
         if ($request->filled('search')) {
             $s = $request->search;
             $query->where(function ($q) use ($s) {
                 $q->where('nomor_kontrak', 'like', "%{$s}%")
                   ->orWhere('nomor_aset', 'like', "%{$s}%")
                   ->orWhereHas('tenant', fn ($q2) => $q2->where('nama_mitra', 'like', "%{$s}%"))
-                  ->orWhereHas('asset', fn ($q2) => $q2->where('blok_aset', 'like', "%{$s}%"));
+                  ->orWhereHas('asset', fn ($q2) => $q2->where('blok_aset', 'like', "%{$s}%"))
+                  ->orWhereHas('payments', fn ($q3) => 
+                      $q3->where('transaction_id', 'like', "%{$s}%")
+                         ->orWhere('invoice_id', 'like', "%{$s}%")
+                         ->orWhere('virtual_account', 'like', "%{$s}%")
+                  );
             });
         }
 
