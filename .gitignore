@@ -52,4 +52,6 @@ Desktop.ini
 
 # Certificates
 *.pem
+# Allow TiDB SSL certificate for Vercel deployment
+!isrgrootx1.pem
 

@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "buildCommand": "composer install --no-dev --optimize-autoloader && npm install && npm run build",
+  "functions": {
+    "api/index.php": {
+      "runtime": "vercel-php@0.7.4",
+      "maxDuration": 30
+    }
+  },
+  "routes": [
+    { "src": "/build/(.*)", "dest": "/public/build/$1" },
+    { "src": "/js/(.*)",    "dest": "/public/js/$1" },
+    { "src": "/images/(.*)", "dest": "/public/images/$1" },
+    { "src": "/image/(.*)", "dest": "/public/image/$1" },
+    { "src": "/css/(.*)",   "dest": "/public/css/$1" },
+    { "src": "/(.*)",       "dest": "/api/index.php" }
+  ],
+  "env": {
+    "APP_ENV": "production",
+    "APP_DEBUG": "false",
+    "LOG_CHANNEL": "stderr",
+    "LOG_LEVEL": "error",
+    "CACHE_STORE": "redis",
+    "SESSION_DRIVER": "redis",
+    "FILESYSTEM_DISK": "local",
+    "MYSQL_ATTR_SSL_CA": "/var/task/isrgrootx1.pem"
+  }
+}
