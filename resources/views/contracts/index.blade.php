@@ -23,9 +23,16 @@
                 Daftar Kontrak
             </h1>
             <div class="flex items-center gap-2 self-start sm:self-auto">
+                @if(auth()->check() && (auth()->user()->isSuperAdmin() || auth()->user()->isAdmin()))
+                    <a href="{{ route('contracts.create') }}"
+                       class="flex items-center gap-1.5 sm:gap-2 rounded-lg lg:rounded-[10px] bg-[#0066FF] hover:bg-blue-700 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-xs transition active:scale-95 cursor-pointer">
+                        <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                        <span>Tambah Kontrak</span>
+                    </a>
+                @endif
                 <button id="btn-filter" type="button"
-                    class="flex items-center gap-1.5 sm:gap-2 rounded-lg lg:rounded-[10px] bg-[#0066FF] hover:bg-blue-700 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-xs transition cursor-pointer">
-                    <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>
+                    class="flex items-center gap-1.5 sm:gap-2 rounded-lg lg:rounded-[10px] bg-white dark:bg-[#2D3034] border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/10 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-gray-700 dark:text-white shadow-xs transition cursor-pointer">
+                    <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#0066FF]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>
                     <span>Filter</span>
                 </button>
                 <a href="{{ route('contracts.index') }}"
@@ -161,6 +168,25 @@
                                 <span class="font-semibold text-gray-800 dark:text-white text-[11px]">{{ $item->sisa_hari }}</span>
                             </div>
                         </div>
+
+                        @if(auth()->check() && (auth()->user()->isSuperAdmin() || auth()->user()->isAdmin()))
+                            <div class="flex items-center justify-end gap-2 pt-1 border-t border-gray-100 dark:border-white/10">
+                                <a href="{{ route('contracts.edit', $item->nomor_kontrak) }}"
+                                   class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 dark:bg-blue-900/30 text-[#0066FF] dark:text-[#3B82F6] hover:bg-blue-100 dark:hover:bg-blue-900/50 transition">
+                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                    <span>Edit</span>
+                                </a>
+                                <form action="{{ route('contracts.destroy', $item->nomor_kontrak) }}" method="POST" onsubmit="return confirm('Apakah Anda yakin ingin menghapus kontrak ini beserta seluruh data tagihan terkait?')">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button type="submit"
+                                       class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/60 transition cursor-pointer">
+                                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                        <span>Hapus</span>
+                                    </button>
+                                </form>
+                            </div>
+                        @endif
                     </div>
                 @empty
                     <div class="text-center py-8 text-xs text-gray-400 dark:text-[#9AA0A6] bg-gray-50 dark:bg-[#2D3034] rounded-xl">
@@ -185,6 +211,9 @@
                                 <th class="py-3 px-4 text-xs font-semibold text-gray-400 dark:text-[#9AA0A6] whitespace-nowrap">Sisa</th>
                                 <th class="py-3 px-4 text-xs font-semibold text-gray-400 dark:text-[#9AA0A6] whitespace-nowrap">Status Mitra</th>
                                 <th class="py-3 px-4 text-xs font-semibold text-gray-400 dark:text-[#9AA0A6] whitespace-nowrap">Status Kontrak</th>
+                                @if(auth()->check() && (auth()->user()->isSuperAdmin() || auth()->user()->isAdmin()))
+                                    <th class="py-3 px-4 text-xs font-semibold text-gray-400 dark:text-[#9AA0A6] text-right whitespace-nowrap">Aksi</th>
+                                @endif
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100 dark:divide-white/10 text-[13px] text-gray-800 dark:text-gray-200">
@@ -209,10 +238,30 @@
                                             {{ $item->status_kontrak }}
                                         </span>
                                     </td>
+                                    @if(auth()->check() && (auth()->user()->isSuperAdmin() || auth()->user()->isAdmin()))
+                                        <td class="py-3.5 px-4 text-right whitespace-nowrap">
+                                            <div class="inline-flex items-center gap-1.5 justify-end">
+                                                <a href="{{ route('contracts.edit', $item->nomor_kontrak) }}"
+                                                   class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-50 dark:bg-blue-900/30 text-[#0066FF] dark:text-[#3B82F6] hover:bg-blue-100 dark:hover:bg-blue-900/50 transition" title="Edit Kontrak">
+                                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                                    <span>Edit</span>
+                                                </a>
+                                                <form action="{{ route('contracts.destroy', $item->nomor_kontrak) }}" method="POST" onsubmit="return confirm('Apakah Anda yakin ingin menghapus kontrak ini beserta data tagihan terkait?')">
+                                                    @csrf
+                                                    @method('DELETE')
+                                                    <button type="submit"
+                                                       class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/60 transition cursor-pointer" title="Hapus Kontrak">
+                                                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                                        <span>Hapus</span>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    @endif
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="10" class="text-center py-8 text-gray-400 dark:text-[#9AA0A6]">
+                                    <td colspan="{{ auth()->check() && (auth()->user()->isSuperAdmin() || auth()->user()->isAdmin()) ? 11 : 10 }}" class="text-center py-8 text-gray-400 dark:text-[#9AA0A6]">
                                         Tidak ada data kontrak yang tersedia.
                                     </td>
                                 </tr>
