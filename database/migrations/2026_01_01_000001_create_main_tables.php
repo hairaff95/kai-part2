@@ -44,12 +44,12 @@ return new class extends Migration
             $table->timestamp('created_at')->useCurrent();
 
             $table->foreign('tenant_id')
-                  ->references('id')->on('tenants')
-                  ->cascadeOnDelete()->cascadeOnUpdate();
+                ->references('id')->on('tenants')
+                ->cascadeOnDelete()->cascadeOnUpdate();
 
             $table->foreign('nomor_aset')
-                  ->references('nomor_aset')->on('assets')
-                  ->nullOnDelete()->cascadeOnUpdate();
+                ->references('nomor_aset')->on('assets')
+                ->nullOnDelete()->cascadeOnUpdate();
         });
 
         // 4. Tabel Payment Records (Data Tagihan per Termin)
@@ -65,8 +65,8 @@ return new class extends Migration
             $table->timestamp('created_at')->useCurrent();
 
             $table->foreign('nomor_kontrak')
-                  ->references('nomor_kontrak')->on('contracts')
-                  ->cascadeOnDelete()->cascadeOnUpdate();
+                ->references('nomor_kontrak')->on('contracts')
+                ->cascadeOnDelete()->cascadeOnUpdate();
         });
     }
 

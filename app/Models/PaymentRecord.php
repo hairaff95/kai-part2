@@ -24,9 +24,9 @@ class PaymentRecord extends Model
 
     protected $casts = [
         'tanggal_termin' => 'date',
-        'total_bayar'    => 'float',
-        'termin_ke'      => 'integer',
-        'created_at'     => 'datetime',
+        'total_bayar' => 'float',
+        'termin_ke' => 'integer',
+        'created_at' => 'datetime',
     ];
 
     public function contract(): BelongsTo
@@ -37,6 +37,6 @@ class PaymentRecord extends Model
     // Accessor total bayar format Rupiah
     public function getTotalBayarFormattedAttribute(): string
     {
-        return 'Rp ' . number_format((float) $this->total_bayar, 0, ',', '.');
+        return 'Rp '.number_format((float) $this->total_bayar, 0, ',', '.');
     }
 }

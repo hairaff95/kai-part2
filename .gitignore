@@ -49,3 +49,7 @@ Desktop.ini
 
 # Bootstrap cache
 /bootstrap/cache/*.php
+
+# Certificates
+*.pem
+

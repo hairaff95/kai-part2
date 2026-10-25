@@ -245,5 +245,6 @@
     </main>
 
     <x-toast />
+    <x-temp-password-guard />
 </body>
 </html>

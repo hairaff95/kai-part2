@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -12,8 +13,10 @@ class KaiContract extends Model
     protected $table = 'contracts';
 
     protected $primaryKey = 'nomor_kontrak';
-    public $incrementing  = false;
-    protected $keyType    = 'string';
+
+    public $incrementing = false;
+
+    protected $keyType = 'string';
 
     public $timestamps = false;
 
@@ -30,10 +33,10 @@ class KaiContract extends Model
     ];
 
     protected $casts = [
-        'masa_awal'      => 'date',
-        'masa_akhir'     => 'date',
-        'nilai_kontrak'  => 'float',
-        'created_at'     => 'datetime',
+        'masa_awal' => 'date',
+        'masa_akhir' => 'date',
+        'nilai_kontrak' => 'float',
+        'created_at' => 'datetime',
     ];
 
     // ── Relationships ────────────────────────────────────────────────────────
@@ -62,9 +65,10 @@ class KaiContract extends Model
     {
         $val = (float) $this->nilai_kontrak;
         if ($val >= 1_000_000_000) {
-            return 'Rp ' . number_format($val / 1_000_000_000, 2, ',', '.') . ' M';
+            return 'Rp '.number_format($val / 1_000_000_000, 2, ',', '.').' M';
         }
-        return 'Rp ' . number_format($val, 0, ',', '.');
+
+        return 'Rp '.number_format($val, 0, ',', '.');
     }
 
     /**
@@ -82,12 +86,12 @@ class KaiContract extends Model
      */
     public function getStatusKontrakAttribute(): string
     {
-        if (!$this->masa_akhir) {
+        if (! $this->masa_akhir) {
             return 'Belum Ada Tanggal Akhir';
         }
 
         try {
-            $akhir = $this->masa_akhir instanceof \Carbon\CarbonInterface
+            $akhir = $this->masa_akhir instanceof CarbonInterface
                 ? $this->masa_akhir->copy()->startOfDay()
                 : Carbon::parse((string) $this->masa_akhir)->startOfDay();
 
@@ -101,44 +105,47 @@ class KaiContract extends Model
 
     /**
      * Kelas Tailwind CSS badge untuk status kontrak.
-     *
-     * @return string
      */
     public function getStatusKontrakBadgeAttribute(): string
     {
         return match ($this->status_kontrak) {
-            'Kontrak Aktif'        => 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800',
-            'Backlog'              => 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-800',
-            default                => 'bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 border border-gray-200/60 dark:border-white/10',
+            'Kontrak Aktif' => 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800',
+            'Backlog' => 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-800',
+            default => 'bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 border border-gray-200/60 dark:border-white/10',
         };
     }
 
     /**
      * Sisa hari kontrak dalam format human-readable.
-     *
-     * @return string
      */
     public function getSisaHariAttribute(): string
     {
-        if (!$this->masa_akhir) return '-';
+        if (! $this->masa_akhir) {
+            return '-';
+        }
 
         try {
-            $akhir = $this->masa_akhir instanceof \Carbon\CarbonInterface
+            $akhir = $this->masa_akhir instanceof CarbonInterface
                 ? $this->masa_akhir->copy()->startOfDay()
                 : Carbon::parse((string) $this->masa_akhir)->startOfDay();
 
             $today = now()->startOfDay();
 
-            if ($akhir->lt($today)) return 'Sudah berakhir';
-            if ($akhir->eq($today)) return 'Hari ini';
+            if ($akhir->lt($today)) {
+                return 'Sudah berakhir';
+            }
+            if ($akhir->eq($today)) {
+                return 'Hari ini';
+            }
 
             $months = (int) $today->diffInMonths($akhir);
-            $days   = (int) $today->copy()->addMonths($months)->diffInDays($akhir);
+            $days = (int) $today->copy()->addMonths($months)->diffInDays($akhir);
 
             if ($months > 0) {
-                return $months . ' bulan' . ($days > 0 ? ' ' . $days . ' hari' : '');
+                return $months.' bulan'.($days > 0 ? ' '.$days.' hari' : '');
             }
-            return $days . ' hari';
+
+            return $days.' hari';
         } catch (\Throwable $e) {
             return '-';
         }
@@ -154,10 +161,10 @@ class KaiContract extends Model
         $today = now()->toDateString();
 
         return match ($status) {
-            'aktif'         => $query->whereNotNull('masa_akhir')->whereDate('masa_akhir', '>=', $today),
-            'backlog'       => $query->whereNotNull('masa_akhir')->whereDate('masa_akhir', '<', $today),
+            'aktif' => $query->whereNotNull('masa_akhir')->whereDate('masa_akhir', '>=', $today),
+            'backlog' => $query->whereNotNull('masa_akhir')->whereDate('masa_akhir', '<', $today),
             'tanpa_tanggal' => $query->whereNull('masa_akhir'),
-            default         => $query,
+            default => $query,
         };
     }
 }

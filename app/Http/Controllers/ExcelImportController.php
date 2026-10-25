@@ -2,15 +2,17 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\KaiContract;
 use App\Models\KaiAsset;
-use App\Models\Tenant;
+use App\Models\KaiContract;
 use App\Models\PaymentRecord;
+use App\Models\Tenant;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Shared\Date;
 
 class ExcelImportController extends Controller
 {
@@ -33,13 +35,13 @@ class ExcelImportController extends Controller
             'excel_file' => 'required|file|max:51200',
         ], [
             'excel_file.required' => 'Silakan pilih file Excel (.xlsx, .xls) atau CSV terlebih dahulu.',
-            'excel_file.max'      => 'Ukuran file maksimal 50 MB.',
+            'excel_file.max' => 'Ukuran file maksimal 50 MB.',
         ]);
 
         $file = $request->file('excel_file');
-        $ext  = strtolower($file->getClientOriginalExtension());
+        $ext = strtolower($file->getClientOriginalExtension());
 
-        if (!in_array($ext, ['xlsx', 'xls', 'csv', 'txt'])) {
+        if (! in_array($ext, ['xlsx', 'xls', 'csv', 'txt'])) {
             return back()->with('error', 'Format tidak didukung. Harap gunakan file Excel (.xlsx, .xls) atau CSV (.csv).');
         }
 
@@ -55,23 +57,26 @@ class ExcelImportController extends Controller
             for ($i = 0; $i < $headerIndex; $i++) {
                 array_shift($rows);
             }
-            $headerRow         = array_shift($rows);
-            $normalizedHeaders = array_map(fn($h) => $this->normalizeHeader($h), $headerRow);
+            $headerRow = array_shift($rows);
+            $normalizedHeaders = array_map(fn ($h) => $this->normalizeHeader($h), $headerRow);
 
             // Inisialisasi struktur data in-memory
             $uniqueTenantsData = []; // [tenantKey => ['nama_mitra' => ..., ...]]
-            $uniqueAssetsData  = []; // [nomorAset => ['nomor_aset' => ..., ...]]
-            $contractsData     = []; // [targetKontrak => [...]]
-            $paymentsData      = []; // [ [...], [...] ]
-            $skipped           = [];
-            $seen              = []; // Tracking nomor kontrak berulang agar seluruh baris tertulis
+            $uniqueAssetsData = []; // [nomorAset => ['nomor_aset' => ..., ...]]
+            $contractsData = []; // [targetKontrak => [...]]
+            $paymentsData = []; // [ [...], [...] ]
+            $skipped = [];
+            $seen = []; // Tracking nomor kontrak berulang agar seluruh baris tertulis
+            $lastAssetByContract = []; // Tracking nomor aset per kontrak dasar (inheritance)
+            $lastBlokByContract = []; // Tracking blok aset per kontrak dasar
+            $lastJenisByContract = []; // Tracking jenis aset per kontrak dasar
 
             // ── FASE 1: Parse semua baris dalam memory (0 query database) ─
             foreach ($rows as $rowIdx => $row) {
                 $excelRow = $rowIdx + $headerIndex + 2;
 
                 // Lewati baris kosong
-                if (empty(array_filter($row, fn($v) => $v !== null && trim((string)$v) !== ''))) {
+                if (empty(array_filter($row, fn ($v) => $v !== null && trim((string) $v) !== ''))) {
                     continue;
                 }
 
@@ -79,21 +84,22 @@ class ExcelImportController extends Controller
                 $data = [];
                 foreach ($normalizedHeaders as $idx => $key) {
                     if ($key !== '') {
-                        $data[$key] = isset($row[$idx]) ? trim((string)$row[$idx]) : null;
+                        $data[$key] = isset($row[$idx]) ? trim((string) $row[$idx]) : null;
                     }
                 }
 
                 // Ambil nomor kontrak
                 $nomorKontrak = $this->field($data, [
                     'nomor_kontrak', 'no_kontrak', 'no_perjanjian', 'kontrak',
-                    'no_spk', 'nomor_perjanjian'
+                    'no_spk', 'nomor_perjanjian', 'contract_number',
                 ]);
-                if (!$nomorKontrak) {
-                    $nomorKontrak = isset($row[0]) && trim((string)$row[0]) !== '' ? trim((string)$row[0]) : null;
+                if (! $nomorKontrak) {
+                    $nomorKontrak = isset($row[0]) && trim((string) $row[0]) !== '' ? trim((string) $row[0]) : null;
                 }
 
-                if (!$nomorKontrak || str_starts_with($nomorKontrak, '=')) {
+                if (! $nomorKontrak || str_starts_with($nomorKontrak, '=')) {
                     $skipped[] = ['row' => $excelRow, 'reason' => 'Nomor Kontrak kosong atau tidak valid'];
+
                     continue;
                 }
 
@@ -101,26 +107,32 @@ class ExcelImportController extends Controller
 
                 // Jika nomor kontrak muncul beberapa kali (misal karena beberapa invoice/termin),
                 // setiap baris tetap dicatat secara utuh di web dengan penomoran unik deterministik
-                if (!isset($seen[$baseKontrak])) {
+                if (! isset($seen[$baseKontrak])) {
                     $seen[$baseKontrak] = 1;
                     $targetKontrak = $baseKontrak;
                 } else {
                     $seen[$baseKontrak]++;
-                    $targetKontrak = $baseKontrak . ' (' . $seen[$baseKontrak] . ')';
+                    $targetKontrak = $baseKontrak.' ('.$seen[$baseKontrak].')';
                 }
 
                 // Data Mitra
-                $namaMitra = $this->field($data, ['nama_mitra', 'mitra', 'penyewa', 'nama', 'tenant', 'customer', 'nama_penyewa', 'nama_customer']) ?? '-';
-                if (str_starts_with($namaMitra, '=')) $namaMitra = '-';
+                $namaMitra = $this->field($data, ['nama_mitra', 'mitra', 'penyewa', 'nama', 'tenant', 'customer', 'nama_penyewa', 'nama_customer', 'fullname']) ?? '-';
+                if (str_starts_with($namaMitra, '=')) {
+                    $namaMitra = '-';
+                }
                 $alamatMitra = $this->field($data, ['alamat_mitra', 'alamat', 'address', 'domisili']);
-                if ($alamatMitra && str_starts_with($alamatMitra, '=')) $alamatMitra = null;
+                if ($alamatMitra && str_starts_with($alamatMitra, '=')) {
+                    $alamatMitra = null;
+                }
                 $statusMitra = $this->field($data, ['status_mitra', 'status_customer', 'status', 'tipe_mitra']) ?? 'Swasta';
-                if (str_starts_with($statusMitra, '=')) $statusMitra = 'Swasta';
+                if (str_starts_with($statusMitra, '=')) {
+                    $statusMitra = 'Swasta';
+                }
 
                 $tenantKey = strtolower(trim($namaMitra));
-                if (!isset($uniqueTenantsData[$tenantKey])) {
+                if (! isset($uniqueTenantsData[$tenantKey])) {
                     $uniqueTenantsData[$tenantKey] = [
-                        'nama_mitra'   => $namaMitra,
+                        'nama_mitra' => $namaMitra,
                         'alamat_mitra' => $alamatMitra,
                         'status_mitra' => $statusMitra,
                     ];
@@ -128,41 +140,69 @@ class ExcelImportController extends Controller
 
                 // Data Aset
                 $nomorAset = $this->field($data, ['nomor_aset', 'no_aset', 'asset_number', 'id_aset', 'kode_aset']);
-                if ($nomorAset && str_starts_with($nomorAset, '=')) $nomorAset = null;
-                $blokAset  = $this->field($data, ['blok_aset', 'blok', 'lokasi_aset', 'nama_blok', 'lokasi', 'alamat_aset']);
+                if ($nomorAset && str_starts_with($nomorAset, '=')) {
+                    $nomorAset = null;
+                }
+                $blokAset = $this->field($data, ['blok_aset', 'blok', 'lokasi_aset', 'nama_blok', 'lokasi', 'alamat_aset', 'asset_block_name', 'nama_blok_aset', 'blok_asset']);
+                if ($blokAset && str_starts_with($blokAset, '=')) {
+                    $blokAset = null;
+                }
                 $jenisAset = $this->field($data, ['jenis_aset', 'jenis_asset', 'tipe_aset', 'aset']) ?? 'Tanah';
-                $peruntukan= $this->field($data, ['peruntukan', 'kegunaan', 'fungsi']);
-                $luasTanah = $this->parseNumber($this->field($data, ['luas_tanah', 'luas_m2', 'luas', 'luas_bumi'])) ?? 0;
-                $luasBangunan = $this->parseNumber($this->field($data, ['luas_bangunan', 'bangunan', 'luas_gedung'])) ?? 0;
-                $kmhm      = $this->field($data, ['kmhm', 'km_hm', 'km', 'lokasi_km']);
+                if (str_starts_with($jenisAset, '=')) {
+                    $jenisAset = 'Tanah';
+                }
 
-                if ($nomorAset && !isset($uniqueAssetsData[$nomorAset])) {
+                // Pewarisan otomatis (inheritance) nomor aset & blok untuk baris lanjutan kontrak (multi-termin di Excel)
+                if (! $nomorAset && isset($lastAssetByContract[$baseKontrak])) {
+                    $nomorAset = $lastAssetByContract[$baseKontrak];
+                } elseif ($nomorAset) {
+                    $lastAssetByContract[$baseKontrak] = $nomorAset;
+                }
+
+                if (! $blokAset && isset($lastBlokByContract[$baseKontrak])) {
+                    $blokAset = $lastBlokByContract[$baseKontrak];
+                } elseif ($blokAset) {
+                    $lastBlokByContract[$baseKontrak] = $blokAset;
+                }
+
+                if ((! $jenisAset || $jenisAset === 'Tanah') && isset($lastJenisByContract[$baseKontrak])) {
+                    $jenisAset = $lastJenisByContract[$baseKontrak];
+                } elseif ($jenisAset && $jenisAset !== 'Tanah') {
+                    $lastJenisByContract[$baseKontrak] = $jenisAset;
+                }
+
+                $peruntukan = $this->field($data, ['peruntukan', 'kegunaan', 'fungsi']);
+                $luasTanah = $this->parseNumber($this->field($data, ['luas_tanah', 'luas_m2', 'luas', 'luas_bumi', 'size_area'])) ?? 0;
+                $luasBangunan = $this->parseNumber($this->field($data, ['luas_bangunan', 'bangunan', 'luas_gedung'])) ?? 0;
+                $kmhm = $this->field($data, ['kmhm', 'km_hm', 'km', 'lokasi_km']);
+
+                if ($nomorAset && ! isset($uniqueAssetsData[$nomorAset])) {
                     $uniqueAssetsData[$nomorAset] = [
-                        'nomor_aset'    => $nomorAset,
-                        'blok_aset'     => $blokAset,
-                        'jenis_aset'    => $jenisAset,
-                        'peruntukan'    => $peruntukan,
-                        'luas_tanah'    => $luasTanah,
+                        'nomor_aset' => $nomorAset,
+                        'blok_aset' => $blokAset,
+                        'jenis_aset' => $jenisAset,
+                        'peruntukan' => $peruntukan,
+                        'luas_tanah' => $luasTanah,
                         'luas_bangunan' => $luasBangunan,
-                        'kmhm'          => $kmhm,
+                        'kmhm' => $kmhm,
                     ];
                 }
 
                 // Data Kontrak
-                $tglKontrak  = $this->field($data, ['tanggal_kontrak', 'tgl_kontrak', 'waktu_kontrak', 'tgl_perjanjian']);
-                $kelompok    = $this->field($data, ['kelompok', 'kategori', 'jenis_pendapatan', 'tipe', 'kelompok_aset']);
-                $masaAwal    = $this->parseDate($this->field($data, ['masa_awal', 'start_datetime', 'awal', 'mulai', 'tgl_mulai', 'tanggal_mulai', 'periode_awal']));
-                $masaAkhir   = $this->parseDate($this->field($data, ['masa_akhir', 'end_datetime', 'akhir', 'selesai', 'tgl_akhir', 'tanggal_akhir', 'jatuh_tempo', 'tgl_jatuh_tempo', 'periode_akhir']));
-                $nilaiKontrak= $this->parseNumber($this->field($data, ['nilai_kontrak', 'harga', 'nilai', 'tarif', 'total_kontrak', 'nominal_kontrak', 'nilai_perjanjian'])) ?? 0;
+                $tglKontrak = $this->field($data, ['tanggal_kontrak', 'tgl_kontrak', 'waktu_kontrak', 'tgl_perjanjian', 'contract_date']);
+                $kelompok = $this->field($data, ['kelompok', 'kategori', 'jenis_pendapatan', 'tipe', 'kelompok_aset']);
+                $masaAwal = $this->parseDate($this->field($data, ['masa_awal', 'start_datetime', 'awal', 'mulai', 'tgl_mulai', 'tanggal_mulai', 'periode_awal']));
+                $masaAkhir = $this->parseDate($this->field($data, ['masa_akhir', 'end_datetime', 'akhir', 'selesai', 'tgl_akhir', 'tanggal_akhir', 'jatuh_tempo', 'tgl_jatuh_tempo', 'periode_akhir']));
+                $nilaiKontrak = $this->parseNumber($this->field($data, ['nilai_kontrak', 'harga', 'nilai', 'tarif', 'total_kontrak', 'nominal_kontrak', 'nilai_perjanjian', 'price'])) ?? 0;
 
                 // Data Tagihan / Invoice
-                $rawTermin   = $this->parseNumber($this->field($data, ['termin_ke', 'termin', 'no_termin', 'ke', 'termin_pembayaran', 'angsuran_ke']));
-                $terminKe    = $rawTermin !== null ? (int)$rawTermin : 0;
-                $virtualAcc  = $this->cleanIdNumber($this->field($data, ['virtual_account', 'va', 'no_va', 'rekening_va', 'nomor_va']));
-                $tglTermin   = $this->parseDate($this->field($data, ['tanggal_termin', 'tgl_termin', 'tgl_bayar', 'tanggal_bayar', 'tgl_invoice', 'tanggal_invoice', 'tgl_tagihan']));
-                $totalBayar  = $this->parseNumber($this->field($data, ['total_bayar', 'bayar', 'pembayaran', 'nilai_bayar', 'jumlah_bayar', 'nominal_bayar', 'nominal', 'amount', 'nilai_tagihan', 'total_tagihan'])) ?? 0;
-                $invoiceId   = $this->cleanIdNumber($this->field($data, ['invoice_id', 'invoice', 'no_invoice', 'nomor_invoice', 'id_invoice']));
-                $transId     = $this->cleanIdNumber($this->field($data, ['transaction_id', 'trx_id', 'id_transaksi', 'no_transaksi', 'id_trans']));
+                $rawTermin = $this->parseNumber($this->field($data, ['termin_ke', 'termin', 'no_termin', 'ke', 'termin_pembayaran', 'angsuran_ke']));
+                $terminKe = $rawTermin !== null ? (int) $rawTermin : 0;
+                $virtualAcc = $this->cleanIdNumber($this->field($data, ['virtual_account', 'va', 'no_va', 'rekening_va', 'nomor_va']));
+                $tglTermin = $this->parseDate($this->field($data, ['tanggal_termin', 'tgl_termin', 'tgl_bayar', 'tanggal_bayar', 'tgl_invoice', 'tanggal_invoice', 'tgl_tagihan']));
+                $totalBayar = $this->parseNumber($this->field($data, ['total_bayar', 'bayar', 'pembayaran', 'nilai_bayar', 'jumlah_bayar', 'nominal_bayar', 'nominal', 'amount', 'nilai_tagihan', 'total_tagihan'])) ?? 0;
+                $invoiceId = $this->cleanIdNumber($this->field($data, ['invoice_id', 'invoice', 'no_invoice', 'nomor_invoice', 'id_invoice']));
+                $transId = $this->cleanIdNumber($this->field($data, ['transaction_id', 'trx_id', 'id_transaksi', 'no_transaksi', 'id_trans']));
 
                 $actualTermin = $terminKe > 0 ? $terminKe : $seen[$baseKontrak];
 
@@ -170,54 +210,54 @@ class ExcelImportController extends Controller
                 $finalNilai = $nilaiKontrak > 0 ? $nilaiKontrak : $totalBayar;
 
                 $contractsData[$targetKontrak] = [
-                    'nomor_kontrak'  => $targetKontrak,
-                    'tenant_key'     => $tenantKey,
-                    'nomor_aset'     => $nomorAset,
-                    'tanggal_kontrak'=> $tglKontrak,
-                    'kelompok'       => $kelompok,
-                    'masa_awal'      => $masaAwal,
-                    'masa_akhir'     => $masaAkhir,
-                    'nilai_kontrak'  => $finalNilai,
+                    'nomor_kontrak' => $targetKontrak,
+                    'tenant_key' => $tenantKey,
+                    'nomor_aset' => $nomorAset ?: null,
+                    'tanggal_kontrak' => $tglKontrak,
+                    'kelompok' => $kelompok,
+                    'masa_awal' => $masaAwal,
+                    'masa_akhir' => $masaAkhir,
+                    'nilai_kontrak' => $finalNilai,
                 ];
 
                 $paymentsData[] = [
-                    'nomor_kontrak'      => $targetKontrak,
+                    'nomor_kontrak' => $targetKontrak,
                     'base_nomor_kontrak' => $baseKontrak,
-                    'termin_ke'          => max(1, $actualTermin),
-                    'virtual_account'    => $virtualAcc,
-                    'tanggal_termin'     => $tglTermin,
-                    'total_bayar'        => $totalBayar,
-                    'invoice_id'         => $invoiceId,
-                    'transaction_id'     => $transId,
+                    'termin_ke' => max(1, $actualTermin),
+                    'virtual_account' => $virtualAcc,
+                    'tanggal_termin' => $tglTermin,
+                    'total_bayar' => $totalBayar,
+                    'invoice_id' => $invoiceId ?: null,
+                    'transaction_id' => $transId ?: null,
                 ];
             }
 
             // ── FASE 2: Eksekusi Bulk Database (Sangat Cepat & Anti-Duplikasi) ─
 
             // 1. Bulk Tenants
-            $existingTenants = Tenant::all()->keyBy(fn($t) => strtolower(trim($t->nama_mitra)));
+            $existingTenants = Tenant::all()->keyBy(fn ($t) => strtolower(trim($t->nama_mitra)));
             $newTenants = [];
             foreach ($uniqueTenantsData as $key => $tData) {
-                if (!$existingTenants->has($key)) {
+                if (! $existingTenants->has($key)) {
                     $newTenants[] = $tData;
                 }
             }
-            if (!empty($newTenants)) {
+            if (! empty($newTenants)) {
                 foreach (array_chunk($newTenants, 500) as $chunk) {
                     DB::table('tenants')->insert($chunk);
                 }
-                $existingTenants = Tenant::all()->keyBy(fn($t) => strtolower(trim($t->nama_mitra)));
+                $existingTenants = Tenant::all()->keyBy(fn ($t) => strtolower(trim($t->nama_mitra)));
             }
 
             // 2. Bulk Assets
-            $existingAssets = KaiAsset::all()->keyBy(fn($a) => trim($a->nomor_aset));
+            $existingAssets = KaiAsset::all()->keyBy(fn ($a) => trim($a->nomor_aset));
             $newAssets = [];
             foreach ($uniqueAssetsData as $num => $aData) {
-                if (!$existingAssets->has($num)) {
+                if (! $existingAssets->has($num)) {
                     $newAssets[] = $aData;
                 }
             }
-            if (!empty($newAssets)) {
+            if (! empty($newAssets)) {
                 foreach (array_chunk($newAssets, 500) as $chunk) {
                     DB::table('assets')->insertOrIgnore($chunk);
                 }
@@ -240,19 +280,19 @@ class ExcelImportController extends Controller
                 }
 
                 $contractsPayload[] = [
-                    'nomor_kontrak'   => $cNum,
-                    'tenant_id'       => $tenantId,
-                    'nomor_aset'      => $c['nomor_aset'],
+                    'nomor_kontrak' => $cNum,
+                    'tenant_id' => $tenantId,
+                    'nomor_aset' => $c['nomor_aset'],
                     'tanggal_kontrak' => $c['tanggal_kontrak'],
-                    'kelompok'        => $c['kelompok'],
-                    'masa_awal'       => $c['masa_awal'],
-                    'masa_akhir'      => $c['masa_akhir'],
-                    'nilai_kontrak'   => $c['nilai_kontrak'],
-                    'created_at'      => now(),
+                    'kelompok' => $c['kelompok'],
+                    'masa_awal' => $c['masa_awal'],
+                    'masa_akhir' => $c['masa_akhir'],
+                    'nilai_kontrak' => $c['nilai_kontrak'],
+                    'created_at' => now(),
                 ];
             }
 
-            if (!empty($contractsPayload)) {
+            if (! empty($contractsPayload)) {
                 foreach (array_chunk($contractsPayload, 500) as $chunk) {
                     DB::table('contracts')->upsert(
                         $chunk,
@@ -264,50 +304,58 @@ class ExcelImportController extends Controller
 
             // 4. Bulk Upsert Payments (Anti-Duplikasi dengan pencocokan cerdas)
             $existingPayments = PaymentRecord::all();
-            $byTargetKontrak  = $existingPayments->groupBy('nomor_kontrak');
-            $byInvoiceId      = $existingPayments->whereNotNull('invoice_id')->where('invoice_id', '!=', '')->keyBy('invoice_id');
-            $byTransactionId  = $existingPayments->whereNotNull('transaction_id')->where('transaction_id', '!=', '')->keyBy('transaction_id');
-            $byBaseTermin     = $existingPayments->groupBy(fn($p) => $p->nomor_kontrak . '___' . $p->termin_ke);
+            $byTargetKontrak = $existingPayments->groupBy('nomor_kontrak');
+            $byInvoiceId = $existingPayments->whereNotNull('invoice_id')->where('invoice_id', '!=', '')->keyBy('invoice_id');
+            $byTransactionId = $existingPayments->whereNotNull('transaction_id')->where('transaction_id', '!=', '')->keyBy('transaction_id');
+            $byBaseTermin = $existingPayments->groupBy(fn ($p) => $p->nomor_kontrak.'___'.$p->termin_ke);
 
-            $claimedIds       = [];
+            $claimedIds = [];
             $paymentsToInsert = [];
             $paymentsToUpdate = [];
-            $paymentsCreated  = 0;
-            $paymentsUpdated  = 0;
+            $paymentsCreated = 0;
+            $paymentsUpdated = 0;
 
             foreach ($paymentsData as $pay) {
                 $targetKontrak = $pay['nomor_kontrak'];
-                $baseKontrak   = $pay['base_nomor_kontrak'];
-                $termin        = $pay['termin_ke'];
-                $invId         = $pay['invoice_id'];
-                $trxId         = $pay['transaction_id'];
+                $baseKontrak = $pay['base_nomor_kontrak'];
+                $termin = $pay['termin_ke'];
+                $invId = $pay['invoice_id'];
+                $trxId = $pay['transaction_id'];
 
                 $existing = null;
 
                 // 1. Cocokkan target kontrak yang sama persis
                 if ($byTargetKontrak->has($targetKontrak)) {
-                    $cand = $byTargetKontrak->get($targetKontrak)->first(fn($p) => !isset($claimedIds[$p->id]));
-                    if ($cand) $existing = $cand;
+                    $cand = $byTargetKontrak->get($targetKontrak)->first(fn ($p) => ! isset($claimedIds[$p->id]));
+                    if ($cand) {
+                        $existing = $cand;
+                    }
                 }
 
                 // 2. Cocokkan invoice_id unik
-                if (!$existing && $invId && $byInvoiceId->has($invId)) {
+                if (! $existing && $invId && $byInvoiceId->has($invId)) {
                     $cand = $byInvoiceId->get($invId);
-                    if ($cand && !isset($claimedIds[$cand->id])) $existing = $cand;
+                    if ($cand && ! isset($claimedIds[$cand->id])) {
+                        $existing = $cand;
+                    }
                 }
 
                 // 3. Cocokkan transaction_id unik
-                if (!$existing && $trxId && $byTransactionId->has($trxId)) {
+                if (! $existing && $trxId && $byTransactionId->has($trxId)) {
                     $cand = $byTransactionId->get($trxId);
-                    if ($cand && !isset($claimedIds[$cand->id])) $existing = $cand;
+                    if ($cand && ! isset($claimedIds[$cand->id])) {
+                        $existing = $cand;
+                    }
                 }
 
                 // 4. Cocokkan base kontrak + termin (untuk data lama yang belum ber-suffix)
-                if (!$existing) {
-                    $key = $baseKontrak . '___' . $termin;
+                if (! $existing) {
+                    $key = $baseKontrak.'___'.$termin;
                     if ($byBaseTermin->has($key)) {
-                        $cand = $byBaseTermin->get($key)->first(fn($p) => !isset($claimedIds[$p->id]));
-                        if ($cand) $existing = $cand;
+                        $cand = $byBaseTermin->get($key)->first(fn ($p) => ! isset($claimedIds[$p->id]));
+                        if ($cand) {
+                            $existing = $cand;
+                        }
                     }
                 }
 
@@ -325,13 +373,13 @@ class ExcelImportController extends Controller
                 }
             }
 
-            if (!empty($paymentsToInsert)) {
+            if (! empty($paymentsToInsert)) {
                 foreach (array_chunk($paymentsToInsert, 500) as $chunk) {
                     DB::table('payment_records')->insert($chunk);
                 }
             }
 
-            if (!empty($paymentsToUpdate)) {
+            if (! empty($paymentsToUpdate)) {
                 foreach (array_chunk($paymentsToUpdate, 500) as $chunk) {
                     DB::table('payment_records')->upsert(
                         $chunk,
@@ -348,18 +396,19 @@ class ExcelImportController extends Controller
             Cache::forget('dropdown_status_mitra');
 
             $totalContracts = $contractsCreated + $contractsUpdated;
-            $totalPayments  = $paymentsCreated + $paymentsUpdated;
+            $totalPayments = $paymentsCreated + $paymentsUpdated;
 
             $message = "Import berhasil: {$totalContracts} kontrak tertulis di web ({$contractsCreated} baru, {$contractsUpdated} diperbarui), {$totalPayments} data tagihan diproses.";
-            if (!empty($skipped)) {
-                $message .= ' (' . count($skipped) . ' baris dilewati karena format tidak lengkap)';
+            if (! empty($skipped)) {
+                $message .= ' ('.count($skipped).' baris dilewati karena format tidak lengkap)';
             }
 
             return back()->with('success', $message);
 
         } catch (\Throwable $e) {
-            Log::error('Import Excel/CSV failed: ' . $e->getMessage() . ' | ' . $e->getFile() . ':' . $e->getLine());
-            return back()->with('error', 'Gagal memproses file: ' . $e->getMessage());
+            Log::error('Import Excel/CSV failed: '.$e->getMessage().' | '.$e->getFile().':'.$e->getLine());
+
+            return back()->with('error', 'Gagal memproses file: '.$e->getMessage());
         }
     }
 
@@ -370,11 +419,20 @@ class ExcelImportController extends Controller
      */
     private function cleanIdNumber(?string $val): ?string
     {
-        if ($val === null || trim($val) === '') return null;
-        $val = trim($val);
-        if (is_numeric($val) && (stripos($val, 'e+') !== false || stripos($val, 'e-') !== false)) {
-            return number_format((float)$val, 0, '', '');
+        if ($val === null || trim($val) === '') {
+            return null;
         }
+        $val = trim($val);
+        if (in_array(strtolower($val), ['null', 'none', '-', 'kosong'])) {
+            return null;
+        }
+        if (preg_match('/^\d+\.0+$/', $val)) {
+            $val = explode('.', $val)[0];
+        }
+        if (is_numeric($val) && (stripos($val, 'e+') !== false || stripos($val, 'e-') !== false)) {
+            return number_format((float) $val, 0, '', '');
+        }
+
         return $val;
     }
 
@@ -405,13 +463,14 @@ class ExcelImportController extends Controller
                 }
                 fclose($handle);
             }
+
             return $rows;
         }
 
         // 2. Ekstensi Excel (.xlsx, .xls) -> PhpSpreadsheet dengan evaluasi formula
         if ($ext === 'xlsx' || $ext === 'xls') {
             try {
-                $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($path);
+                $reader = IOFactory::createReaderForFile($path);
                 $reader->setReadDataOnly(true);
                 $spreadsheet = $reader->load($path);
                 $sheet = $spreadsheet->getActiveSheet();
@@ -437,9 +496,9 @@ class ExcelImportController extends Controller
                         }
 
                         // Format tanggal jika sel berupa Excel date
-                        if ($val !== null && \PhpOffice\PhpSpreadsheet\Shared\Date::isDateTime($cell)) {
+                        if ($val !== null && Date::isDateTime($cell)) {
                             try {
-                                $dateObj = \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($val);
+                                $dateObj = Date::excelToDateTimeObject($val);
                                 $val = $dateObj->format('Y-m-d');
                             } catch (\Throwable $e) {
                                 // fallback
@@ -448,16 +507,17 @@ class ExcelImportController extends Controller
                         if (is_float($val) && floor($val) == $val) {
                             $val = number_format($val, 0, '', '');
                         }
-                        $cells[] = $val !== null ? (string)$val : null;
+                        $cells[] = $val !== null ? (string) $val : null;
                     }
                     $rows[] = $cells;
                 }
 
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
+
                 return $rows;
             } catch (\Throwable $e) {
-                Log::warning('PhpSpreadsheet parse failed, falling back to Zip/XML: ' . $e->getMessage());
+                Log::warning('PhpSpreadsheet parse failed, falling back to Zip/XML: '.$e->getMessage());
             }
         }
 
@@ -475,7 +535,7 @@ class ExcelImportController extends Controller
     private function parseXlsxXmlFallback(string $path): array
     {
         try {
-            $zip = new \ZipArchive();
+            $zip = new \ZipArchive;
             if ($zip->open($path) !== true) {
                 throw new \RuntimeException('Tidak bisa membuka arsip file XLSX.');
             }
@@ -486,40 +546,46 @@ class ExcelImportController extends Controller
                 $ss = simplexml_load_string($ssXml);
                 foreach ($ss->si as $si) {
                     $text = '';
-                    foreach ($si->r as $r) { $text .= (string) $r->t; }
-                    if ($text === '') { $text = (string) $si->t; }
+                    foreach ($si->r as $r) {
+                        $text .= (string) $r->t;
+                    }
+                    if ($text === '') {
+                        $text = (string) $si->t;
+                    }
                     $sharedStrings[] = $text;
                 }
             }
 
             $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
-            if (!$sheetXml) {
+            if (! $sheetXml) {
                 $relsXml = $zip->getFromName('xl/_rels/workbook.xml.rels');
                 if ($relsXml) {
                     $rels = simplexml_load_string($relsXml);
                     foreach ($rels->Relationship as $rel) {
-                        if (str_contains((string)$rel['Target'], 'sheet')) {
-                            $sheetXml = $zip->getFromName('xl/' . (string)$rel['Target']);
-                            if ($sheetXml) break;
+                        if (str_contains((string) $rel['Target'], 'sheet')) {
+                            $sheetXml = $zip->getFromName('xl/'.(string) $rel['Target']);
+                            if ($sheetXml) {
+                                break;
+                            }
                         }
                     }
                 }
             }
             $zip->close();
 
-            if (!$sheetXml) {
+            if (! $sheetXml) {
                 throw new \RuntimeException('Tidak menemukan worksheet pada file XLSX.');
             }
 
             $sheet = simplexml_load_string($sheetXml);
-            $rows  = [];
+            $rows = [];
 
             foreach ($sheet->sheetData->row as $row) {
                 $rowArr = [];
                 $lastColIdx = -1;
 
                 foreach ($row->c as $cell) {
-                    preg_match('/^([A-Z]+)(\d+)$/', (string)$cell['r'], $m);
+                    preg_match('/^([A-Z]+)(\d+)$/', (string) $cell['r'], $m);
                     $colIdx = 0;
                     if (isset($m[1])) {
                         foreach (str_split($m[1]) as $ch) {
@@ -533,13 +599,13 @@ class ExcelImportController extends Controller
                         $lastColIdx++;
                     }
 
-                    $type  = (string)($cell['t'] ?? '');
-                    $value = (string)($cell->v ?? '');
+                    $type = (string) ($cell['t'] ?? '');
+                    $value = (string) ($cell->v ?? '');
 
                     if ($type === 's') {
-                        $value = $sharedStrings[(int)$value] ?? '';
-                    } elseif ($type === '' && is_numeric($value) && (float)$value > 30000 && (float)$value < 60000) {
-                        $value = date('Y-m-d', (int)(((float)$value - 25569) * 86400));
+                        $value = $sharedStrings[(int) $value] ?? '';
+                    } elseif ($type === '' && is_numeric($value) && (float) $value > 30000 && (float) $value < 60000) {
+                        $value = date('Y-m-d', (int) (((float) $value - 25569) * 86400));
                     }
 
                     $rowArr[] = $value;
@@ -551,7 +617,8 @@ class ExcelImportController extends Controller
 
             return $rows;
         } catch (\Throwable $e) {
-            Log::error('XLSX fallback failed: ' . $e->getMessage());
+            Log::error('XLSX fallback failed: '.$e->getMessage());
+
             return [];
         }
     }
@@ -562,21 +629,26 @@ class ExcelImportController extends Controller
     private function detectHeaderRow(array $rows): int
     {
         foreach ($rows as $i => $row) {
-            if (empty(array_filter($row, fn($v) => $v !== null && trim((string)$v) !== ''))) continue;
+            if (empty(array_filter($row, fn ($v) => $v !== null && trim((string) $v) !== ''))) {
+                continue;
+            }
 
             $matched = 0;
             foreach ($row as $cell) {
                 $n = $this->normalizeHeader($cell);
                 if (in_array($n, [
-                    'nomor_kontrak','no_kontrak','kelompok','masa_awal','masa_akhir',
-                    'nama_mitra','nomor_aset','jenis_aset','termin_ke','virtual_account',
-                    'invoice_id','total_bayar','tanggal_termin','transaction_id',
+                    'nomor_kontrak', 'no_kontrak', 'kelompok', 'masa_awal', 'masa_akhir',
+                    'nama_mitra', 'nomor_aset', 'jenis_aset', 'termin_ke', 'virtual_account',
+                    'invoice_id', 'total_bayar', 'tanggal_termin', 'transaction_id',
                 ])) {
                     $matched++;
                 }
             }
-            if ($matched >= 2) return $i;
+            if ($matched >= 2) {
+                return $i;
+            }
         }
+
         return 0;
     }
 
@@ -585,10 +657,13 @@ class ExcelImportController extends Controller
      */
     private function normalizeHeader($val): string
     {
-        if ($val === null) return '';
-        $s = strtolower(trim((string)$val));
+        if ($val === null) {
+            return '';
+        }
+        $s = strtolower(trim((string) $val));
         $s = preg_replace('/[\s\-\/\(\)\.]+/', '_', $s);
         $s = preg_replace('/_+/', '_', $s);
+
         return trim($s, '_');
     }
 
@@ -602,6 +677,7 @@ class ExcelImportController extends Controller
                 return trim($data[$alias]);
             }
         }
+
         return null;
     }
 
@@ -610,20 +686,27 @@ class ExcelImportController extends Controller
      */
     private function parseDate(?string $val): ?string
     {
-        if ($val === null || trim($val) === '') return null;
+        if ($val === null || trim($val) === '') {
+            return null;
+        }
         $val = trim($val);
 
-        if (in_array(strtolower($val), ['kosong', '-', 'null', 'n/a', '0'])) return null;
+        if (in_array(strtolower($val), ['kosong', '-', 'null', 'n/a', '0'])) {
+            return null;
+        }
 
         // Excel serial date integer
-        if (is_numeric($val) && (float)$val > 30000 && (float)$val < 60000) {
-            $unix = ((float)$val - 25569) * 86400;
-            return date('Y-m-d', (int)$unix);
+        if (is_numeric($val) && (float) $val > 30000 && (float) $val < 60000) {
+            $unix = ((float) $val - 25569) * 86400;
+
+            return date('Y-m-d', (int) $unix);
         }
 
         // DD.MM.YYYY HH:MM:SS
         if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})/', $val, $m)) {
-            $d = (int)$m[1]; $mo = (int)$m[2]; $y = (int)$m[3];
+            $d = (int) $m[1];
+            $mo = (int) $m[2];
+            $y = (int) $m[3];
             if (checkdate($mo, $d, $y)) {
                 return sprintf('%04d-%02d-%02d', $y, $mo, $d);
             }
@@ -631,16 +714,24 @@ class ExcelImportController extends Controller
 
         // DD/MM/YYYY atau DD-MM-YYYY
         if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/', $val, $m)) {
-            $d = (int)$m[1]; $mo = (int)$m[2]; $y = (int)$m[3];
+            $d = (int) $m[1];
+            $mo = (int) $m[2];
+            $y = (int) $m[3];
             if ($d > 12) {
-                if (checkdate($mo, $d, $y)) return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+                if (checkdate($mo, $d, $y)) {
+                    return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+                }
             }
-            if (checkdate($mo, $d, $y)) return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+            if (checkdate($mo, $d, $y)) {
+                return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+            }
         }
 
         // YYYY-MM-DD
         if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})$/', $val, $m)) {
-            if (checkdate((int)$m[2], (int)$m[3], (int)$m[1])) return $val;
+            if (checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+                return $val;
+            }
         }
 
         // Carbon fallback
@@ -656,19 +747,23 @@ class ExcelImportController extends Controller
      */
     private function parseNumber(?string $val): ?float
     {
-        if ($val === null || trim($val) === '') return null;
+        if ($val === null || trim($val) === '') {
+            return null;
+        }
         $v = trim($val);
         $v = preg_replace('/[^\d.,]/', '', $v);
-        if ($v === '') return null;
+        if ($v === '') {
+            return null;
+        }
 
         if (preg_match('/,\d{3}(,\d{3})*$/', $v) || preg_match('/^\d{1,3}(,\d{3})+$/', $v)) {
             $v = str_replace(',', '', $v);
         } elseif (preg_match('/\.\d{3}(\.\d{3})*$/', $v) || preg_match('/^\d{1,3}(\.\d{3})+$/', $v)) {
             $v = str_replace('.', '', $v);
-        } elseif (str_contains($v, ',') && !str_contains($v, '.')) {
+        } elseif (str_contains($v, ',') && ! str_contains($v, '.')) {
             $v = str_replace(',', '.', $v);
         }
 
-        return is_numeric($v) ? (float)$v : null;
+        return is_numeric($v) ? (float) $v : null;
     }
 }
