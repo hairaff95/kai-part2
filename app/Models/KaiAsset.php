@@ -3,16 +3,18 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class KaiAsset extends Model
 {
     protected $table = 'assets';
 
     protected $primaryKey = 'nomor_aset';
-    public $incrementing  = false;
-    protected $keyType    = 'string';
+
+    public $incrementing = false;
+
+    protected $keyType = 'string';
 
     public $timestamps = false;
 
@@ -24,18 +26,36 @@ class KaiAsset extends Model
         'luas_tanah',
         'luas_bangunan',
         'kmhm',
+        'stasiun',
+        'wilayah_asset',
+        'status_potensi',
         'latitude',
         'longitude',
         'created_at',
     ];
 
     protected $casts = [
-        'luas_tanah'   => 'float',
-        'luas_bangunan'=> 'float',
-        'latitude'     => 'float',
-        'longitude'    => 'float',
-        'created_at'   => 'datetime',
+        'luas_tanah' => 'float',
+        'luas_bangunan' => 'float',
+        'latitude' => 'float',
+        'longitude' => 'float',
+        'created_at' => 'datetime',
     ];
+
+    public function isPotensial(): bool
+    {
+        return $this->status_potensi === 'potensial' || ! $this->contract;
+    }
+
+    public function getStatusLabelAttribute(): string
+    {
+        return $this->isPotensial() ? 'Potensial (Kosong)' : 'Terkontrak (Terisi)';
+    }
+
+    public function getStatusColorAttribute(): string
+    {
+        return $this->isPotensial() ? '#10B981' : '#EF4444'; // Hijau vs Merah
+    }
 
     public function contract(): HasOne
     {
@@ -50,8 +70,11 @@ class KaiAsset extends Model
     // Accessor luas tanah terformat
     public function getLuasTanahFormattedAttribute(): string
     {
-        if (!$this->luas_tanah) return '-';
+        if (! $this->luas_tanah) {
+            return '-';
+        }
         $val = number_format((float) $this->luas_tanah, 2, ',', '.');
-        return rtrim(rtrim($val, '0'), ',') . ' m²';
+
+        return rtrim(rtrim($val, '0'), ',').' m²';
     }
 }

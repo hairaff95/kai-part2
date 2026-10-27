@@ -19,6 +19,12 @@
                 </a>
             </li>
             <li>
+                <a href="{{ route('map.index') }}"
+                   class="inline-block py-1 pb-1.5 transition-all duration-150 {{ $active === 'map' ? 'font-semibold text-[#0066FF] dark:text-[#3B82F6] border-b-2 border-[#0066FF] dark:border-[#3B82F6]' : 'font-medium hover:text-gray-950 dark:hover:text-white border-b-2 border-transparent' }}">
+                    Peta
+                </a>
+            </li>
+            <li>
                 <a href="{{ route('contracts.index') }}"
                    class="inline-block py-1 pb-1.5 transition-all duration-150 {{ $active === 'contracts' ? 'font-semibold text-[#0066FF] dark:text-[#3B82F6] border-b-2 border-[#0066FF] dark:border-[#3B82F6]' : 'font-medium hover:text-gray-950 dark:hover:text-white border-b-2 border-transparent' }}">
                     Daftar Kontrak
@@ -32,8 +38,16 @@
             </li>
         </ul>
 
-        <!-- Aksi Kanan: Theme Toggle + Profile/Login -->
+        <!-- Aksi Kanan: Theme Toggle + Import + Profile/Login -->
         <div class="flex items-center gap-2 shrink-0">
+
+            <!-- Link Import (Desktop) -->
+            <a href="{{ route('import.index') }}"
+               class="hidden lg:flex items-center gap-1.5 h-9 px-3 rounded-[10px] border border-gray-300/80 dark:border-white/15 bg-white dark:bg-[#2D3034] text-gray-700 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 text-xs font-semibold transition"
+               title="Import Excel / CSV">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                <span>Import</span>
+            </a>
 
             <!-- Theme Toggle -->
             <button
@@ -66,9 +80,7 @@
                                 {{ auth()->user()->name }}
                             </p>
                             <p class="text-[10px] sm:text-xs text-gray-400 dark:text-[#9AA0A6] font-normal">
-                                @if(auth()->user()->isSuperAdmin()) Super Admin
-                                @elseif(auth()->user()->isAdmin()) Admin
-                                @else User @endif
+                                {{ auth()->user()->role_label }}
                             </p>
                         </div>
 
@@ -81,15 +93,8 @@
                         class="absolute right-0 top-full mt-2 w-max min-w-[200px] origin-top-right rounded-2xl p-2 shadow-[0_10px_35px_rgba(0,0,0,0.14)] dark:shadow-[0_10px_35px_rgba(0,0,0,0.7)] opacity-0 invisible scale-95 transition-all duration-200 bg-white dark:bg-[#1F2123] border border-gray-100 dark:border-white/10 z-[110] flex flex-col gap-1"
                     >
                         <div class="px-3 py-2 border-b border-gray-100 dark:border-white/10 text-xs text-gray-500">
-                            Masuk sebagai <strong>{{ auth()->user()->name }}</strong>
+                            Masuk sebagai <strong>{{ auth()->user()->name }}</strong> ({{ auth()->user()->role_label }})
                         </div>
-                        <a href="{{ route('import.index') }}"
-                           class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
-                            <svg class="w-4 h-4 text-[#0066FF] dark:text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
-                            </svg>
-                            <span>Import Data Excel</span>
-                        </a>
                         <form action="{{ route('logout') }}" method="POST">
                             @csrf
                             <button
@@ -121,7 +126,7 @@
 <div class="lg:hidden fixed bottom-0 inset-x-0 z-[120] pointer-events-none select-none px-4 pb-4"
      style="padding-bottom: max(1rem, env(safe-area-inset-bottom, 1rem));">
     <nav id="mobileBottomNav"
-         class="pointer-events-auto max-w-[360px] sm:max-w-[380px] mx-auto bg-white/95 dark:bg-[#1F2123]/95 backdrop-blur-xl rounded-full p-1.5 flex items-center justify-between shadow-[0_8px_35px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_35px_rgba(0,0,0,0.6)] border border-gray-200/80 dark:border-white/10 transition-all duration-300">
+         class="pointer-events-auto max-w-[360px] sm:max-w-[400px] mx-auto bg-white/95 dark:bg-[#1F2123]/95 backdrop-blur-xl rounded-full p-1.5 flex items-center justify-between shadow-[0_8px_35px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_35px_rgba(0,0,0,0.6)] border border-gray-200/80 dark:border-white/10 transition-all duration-300">
 
         <!-- Dashboard -->
         <a href="{{ route('dashboard') }}"
@@ -131,6 +136,17 @@
             <x-icon name="nav-home" class="h-5 w-5 sm:h-[22px] sm:w-[22px]" />
             @if($active === 'dashboard')
                 <span class="text-[11px] font-semibold hidden xs:inline">Dashboard</span>
+            @endif
+        </a>
+
+        <!-- Peta -->
+        <a href="{{ route('map.index') }}"
+           class="mobile-nav-item flex-1 h-11 flex items-center justify-center rounded-[22px] gap-1.5 transition-all duration-200
+                  {{ $active === 'map' ? 'bg-gray-100 dark:bg-[#2D3034] text-[#0066FF] dark:text-white shadow-xs' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-white/5 active:scale-95' }}"
+           title="Peta Potensi">
+            <x-icon name="nav-map" class="h-5 w-5 sm:h-[22px] sm:w-[22px]" />
+            @if($active === 'map')
+                <span class="text-[11px] font-semibold hidden xs:inline">Peta</span>
             @endif
         </a>
 
@@ -158,17 +174,6 @@
 
         <!-- Login / Logout (Mobile) -->
         @auth
-            <!-- Import (Mobile) -->
-            <a href="{{ route('import.index') }}"
-               class="mobile-nav-item flex-1 h-11 flex items-center justify-center rounded-[22px] gap-1.5 transition-all duration-200
-                      {{ $active === 'import' ? 'bg-gray-100 dark:bg-[#2D3034] text-[#0066FF] dark:text-white shadow-xs' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-white/5 active:scale-95' }}"
-               title="Import Excel">
-                <svg class="h-5 w-5 sm:h-[22px] sm:w-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                @if($active === 'import')
-                    <span class="text-[11px] font-semibold hidden xs:inline">Import</span>
-                @endif
-            </a>
-
             <form action="{{ route('logout') }}" method="POST" class="flex-1 flex" onsubmit="return confirm('Apakah Anda yakin ingin keluar?')">
                 @csrf
                 <button

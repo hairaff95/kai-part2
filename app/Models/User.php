@@ -34,4 +34,31 @@ class User extends Authenticatable
     {
         return in_array($this->role, ['admin', 'superadmin']);
     }
+
+    public function isAkuntansi(): bool
+    {
+        return in_array($this->role, ['akuntansi', 'superadmin', 'admin']);
+    }
+
+    public function isKna(): bool
+    {
+        return in_array($this->role, ['kna', 'superadmin', 'admin']);
+    }
+
+    public function isAsset(): bool
+    {
+        return in_array($this->role, ['asset', 'superadmin', 'admin']);
+    }
+
+    public function getRoleLabelAttribute(): string
+    {
+        return match ($this->role) {
+            'superadmin' => 'Super Admin',
+            'admin' => 'Admin Daop 4',
+            'akuntansi' => 'Tim Akuntansi',
+            'kna' => 'Tim KNA',
+            'asset' => 'Divisi Aset',
+            default => ucfirst($this->role ?? 'User'),
+        };
+    }
 }

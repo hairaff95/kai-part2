@@ -13,7 +13,6 @@ class UserSeeder extends Seeder
     {
         $users = [
             [
-                'id' => 1,
                 'username' => 'superadmin',
                 'name' => 'Super Admin KAI Daop 4',
                 'email' => 'superadmin123@gmail.com',
@@ -26,26 +25,36 @@ class UserSeeder extends Seeder
                 'updated_at' => now(),
             ],
             [
-                'id' => 2,
-                'username' => 'admin.daop4',
-                'name' => 'Admin KAI Daop 4',
-                'email' => 'admin@kai-daop4.id',
+                'username' => 'akuntansi',
+                'name' => 'Tim Akuntansi Daop 4',
+                'email' => 'akuntansi@kai-daop4.id',
                 'email_verified_at' => now(),
-                'password' => Hash::make('admin123'),
-                'role' => 'admin',
+                'password' => Hash::make('akuntansi123'),
+                'role' => 'akuntansi',
                 'is_active' => true,
                 'remember_token' => Str::random(10),
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
             [
-                'id' => 3,
-                'username' => 'user.daop4',
-                'name' => 'Staff KAI Daop 4',
-                'email' => 'user@kai-daop4.id',
+                'username' => 'kna',
+                'name' => 'Tim KNA Daop 4',
+                'email' => 'kna@kai-daop4.id',
                 'email_verified_at' => now(),
-                'password' => Hash::make('user123'),
-                'role' => 'user',
+                'password' => Hash::make('kna123'),
+                'role' => 'kna',
+                'is_active' => true,
+                'remember_token' => Str::random(10),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'username' => 'asset',
+                'name' => 'Tim Divisi Aset Daop 4',
+                'email' => 'asset@kai-daop4.id',
+                'email_verified_at' => now(),
+                'password' => Hash::make('asset123'),
+                'role' => 'asset',
                 'is_active' => true,
                 'remember_token' => Str::random(10),
                 'created_at' => now(),
@@ -55,7 +64,7 @@ class UserSeeder extends Seeder
 
         foreach ($users as $userData) {
             User::updateOrCreate(
-                ['id' => $userData['id']],
+                ['username' => $userData['username']],
                 $userData
             );
         }

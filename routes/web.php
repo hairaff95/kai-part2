@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ContractController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExcelImportController;
+use App\Http\Controllers\MapController;
 use App\Http\Controllers\PaymentController;
 use Illuminate\Support\Facades\Route;
 
@@ -14,6 +15,13 @@ Route::match(['get', 'post'], '/logout', [AuthController::class, 'logout'])->nam
 
 // ── Public / Read-Only Routes ─────────────────────────────────────────────────
 Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
+Route::post('/dashboard/update-kinerja', [DashboardController::class, 'updateKinerja'])->name('dashboard.update_kinerja');
+Route::get('/dashboard/live-chart', [DashboardController::class, 'liveChartData'])->name('dashboard.live_chart');
+
+Route::get('/peta', [MapController::class, 'index'])->name('map.index');
+Route::get('/map', fn () => redirect()->route('map.index'));
+Route::post('/peta/aset/{nomor_aset}/status', [MapController::class, 'updateStatus'])->name('map.asset.update');
+
 Route::get('/kontrak', [ContractController::class, 'index'])->name('contracts.index');
 Route::get('/tagihan', [PaymentController::class, 'index'])->name('payments.index');
 
