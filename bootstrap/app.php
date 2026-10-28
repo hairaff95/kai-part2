@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CheckTempPasswordExpiry;
 use App\Http\Middleware\EnsureIsSuperAdmin;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -14,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
+            'temp_pwd_expiry' => CheckTempPasswordExpiry::class,
             'superadmin' => EnsureIsSuperAdmin::class,
         ]);
     })

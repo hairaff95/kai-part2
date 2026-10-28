@@ -95,6 +95,45 @@
                         <div class="px-3 py-2 border-b border-gray-100 dark:border-white/10 text-xs text-gray-500">
                             Masuk sebagai <strong>{{ auth()->user()->name }}</strong> ({{ auth()->user()->role_label }})
                         </div>
+                        @if(auth()->user()->isSuperAdmin())
+                            <a href="{{ route('settings.index', ['tab' => 'manajemen-admin']) }}"
+                               class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                                <svg class="w-4 h-4 text-[#0066FF] dark:text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                                </svg>
+                                <span>Manajemen Admin</span>
+                            </a>
+                            <a href="{{ route('settings.index', ['tab' => 'persetujuan-sandi']) }}"
+                               class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                                <svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                                </svg>
+                                <span>Persetujuan Reset Sandi</span>
+                            </a>
+                            <a href="{{ route('settings.index', ['tab' => 'profil-saya']) }}"
+                               class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                                <svg class="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                </svg>
+                                <span>Pengaturan Akun</span>
+                            </a>
+                        @else
+                            <a href="{{ route('settings.index', ['tab' => 'profil-saya']) }}"
+                               class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                                <svg class="w-4 h-4 text-[#0066FF] dark:text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                </svg>
+                                <span>Profil Saya</span>
+                            </a>
+                        @endif
+                        <a href="{{ route('import.index') }}"
+                           class="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:text-[#0066FF] dark:hover:text-[#3B82F6] rounded-xl transition cursor-pointer">
+                            <svg class="w-4 h-4 text-[#0066FF] dark:text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                            </svg>
+                            <span>Import Data Excel</span>
+                        </a>
                         <form action="{{ route('logout') }}" method="POST">
                             @csrf
                             <button
